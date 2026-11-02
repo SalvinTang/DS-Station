@@ -1,0 +1,249 @@
+:root {
+  color-scheme: light dark;
+
+  --bg: #f6f6f6;
+  --fg: #1b1b1f;
+  --muted: #7c7e88;
+  --line: rgba(0, 0, 0, 0.1);
+  --card: rgba(255, 255, 255, 0.72);
+  --field: #ffffff;
+  --field-line: rgba(0, 0, 0, 0.16);
+  --accent: #4d6bfe;
+  --danger: #d93a2b;
+  --danger-fg: #ffffff;
+  --ok: #1a9e4b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1c20;
+    --fg: #e9eaef;
+    --muted: #8b8d98;
+    --line: rgba(255, 255, 255, 0.11);
+    --card: rgba(255, 255, 255, 0.05);
+    --field: #2a2b31;
+    --field-line: rgba(255, 255, 255, 0.18);
+    --danger: #ff5f52;
+    --ok: #4cd07d;
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-size: 13px;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.page {
+  height: 100%;
+  padding: 46px 26px 22px;
+  display: flex;
+  flex-direction: column;
+}
+
+h1 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin-bottom: 22px;
+}
+
+/* ── 设置项 ─────────────────────────────────────────────── */
+
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 34px;
+  padding: 5px 0;
+}
+
+.label {
+  color: var(--fg);
+}
+
+.value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin: 2px 0 12px;
+  max-width: 95%;
+}
+
+/* ── 控件 ───────────────────────────────────────────────── */
+
+.keycap {
+  font: inherit;
+  font-weight: 600;
+  min-width: 118px;
+  padding: 6px 12px;
+
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-bottom-width: 2px;
+  border-radius: 8px;
+  cursor: pointer;
+
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.keycap:hover {
+  border-color: var(--accent);
+}
+
+.keycap.recording {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--field));
+}
+
+.select {
+  font: inherit;
+  min-width: 118px;
+  padding: 6px 10px;
+
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.select:focus-visible,
+.keycap:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── 状态提示 ───────────────────────────────────────────── */
+
+.status {
+  min-height: 18px;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.status.ok {
+  color: var(--ok);
+}
+
+.status.err {
+  color: var(--danger);
+}
+
+/* ── 底部 ───────────────────────────────────────────────── */
+
+.footer {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+button.danger,
+button.ghost {
+  font: inherit;
+  width: 100%;
+  padding: 8px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+
+button.danger {
+  color: var(--danger-fg);
+  background: var(--danger);
+}
+
+button.danger:hover {
+  filter: brightness(1.07);
+}
+
+button.ghost {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--field-line);
+  width: auto;
+  min-width: 88px;
+}
+
+button.ghost:hover {
+  background: var(--card);
+}
+
+/* ── 确认弹层 ───────────────────────────────────────────── */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.sheet {
+  width: 320px;
+  padding: 20px;
+  border-radius: 14px;
+
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.35);
+}
+
+.sheet h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.sheet .detail {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+
+.sheet-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.sheet-actions button.danger {
+  width: auto;
+  min-width: 96px;
+}

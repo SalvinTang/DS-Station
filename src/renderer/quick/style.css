@@ -1,0 +1,411 @@
+/*
+ * 快捷窗口。
+ * 尺寸与配色取自设计稿：
+ *   空态 400×(100~200)、有内容态 420×716 起
+ *   用户气泡 #133463、右对齐、最大宽度为显示区 75%
+ *   顶栏 420×50、底色 #333333、鼠标移入才出现
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --fg: #1b1b1f;
+  --placeholder: #9aa0ab;
+  --muted: #8b8d98;
+  --hairline: rgba(0, 0, 0, 0.08);
+
+  --icon: #8b8d98;
+  --icon-hover-bg: rgba(125, 130, 155, 0.14);
+  --icon-active: #4d6bfe;
+  --icon-active-bg: rgba(77, 107, 254, 0.12);
+
+  --send-bg: #4d6bfe;
+  --send-disabled-bg: rgba(77, 107, 254, 0.35);
+
+  --user-bubble: #133463;
+  --user-bubble-fg: #ffffff;
+
+  --topbar-bg: #333333;
+  --topbar-fg: rgba(255, 255, 255, 0.82);
+  --topbar-hover: rgba(255, 255, 255, 0.14);
+
+  --scrollbar: rgba(125, 130, 155, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #2c2c2e;
+    --fg: #eceef4;
+    --placeholder: #8b8d98;
+    --muted: #8b8d98;
+    --hairline: rgba(255, 255, 255, 0.1);
+
+    --icon: #9a9ca6;
+    --icon-hover-bg: rgba(255, 255, 255, 0.1);
+    --icon-active: #8098ff;
+    --icon-active-bg: rgba(128, 152, 255, 0.18);
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * ⚠️ 千万不要在 .app 上加 -webkit-app-region: drag。
+ *
+ * Electron 的拖拽区域会**吞掉鼠标事件** —— 滚轮、hover、click 都到不了页面。
+ * 一旦整块应用都是拖拽区，表现就是：消息区滚不动、悬停不出现复制按钮、
+ * 顶栏也永远等不到 mouseenter。
+ *
+ * 所以只在真正「空»的地方开拖拽：顶栏（出现时）和输入区的留白。
+ */
+.app {
+  position: relative;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── 顶部功能栏 ─────────────────────────────────────────── */
+
+/*
+ * 顶栏是**盖在消息区上**的一层，不参与 flex 布局。
+ * 所以它收起后，下面的文字会自然顶上去，不会留下空洞。
+ */
+.topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 10px;
+
+  background: var(--topbar-bg);
+  color: var(--topbar-fg);
+
+  /* 隐藏时**不是**拖拽区 —— 否则鼠标从顶部进入时事件被吞，
+     mouseenter 永远不触发，顶栏就再也出不来了 */
+  -webkit-app-region: no-drag;
+
+  /* 鼠标移入才出现（设计稿）。2 秒后自动隐藏由 main.ts 控制 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.app[data-mode='content'] .topbar.show {
+  opacity: 1;
+  pointer-events: auto;
+  /* 出现之后它才是拖拽手柄 */
+  -webkit-app-region: drag;
+}
+
+/* 空态没有顶栏 */
+.app[data-mode='empty'] .topbar {
+  display: none;
+}
+
+.topbar .spacer {
+  flex: 1;
+}
+
+.tb-btn {
+  -webkit-app-region: no-drag;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.tb-btn:hover {
+  background: var(--topbar-hover);
+}
+
+/* ── 对话区 ─────────────────────────────────────────────── */
+
+.messages {
+  /* 明确声明不是拖拽区，滚轮和 hover 才能正常工作 */
+  -webkit-app-region: no-drag;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 距窗口边缘 10px */
+  padding-top: 10px;
+}
+
+.app[data-mode='empty'] .messages {
+  display: none;
+}
+
+.messages-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /*
+   * 上方的 50px = 顶栏高度。因为顶栏是浮层，滚到最顶时它会盖住
+   * 消息区最上面那一条；留出这段距离，第一条消息才不会被压住。
+   */
+  padding: 50px 16px 10px;
+}
+
+.msg-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.msg-user .bubble {
+  background: var(--user-bubble);
+  color: var(--user-bubble-fg);
+  padding: 9px 13px;
+  border-radius: 14px 14px 4px 14px;
+  /* 设计稿：最大宽度为显示区域的 75%，超出折行 */
+  max-width: 75%;
+  font-size: 13.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.msg-ai .body {
+  font-size: 13.5px;
+  line-height: 1.72;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.msg-actions {
+  display: flex;
+  margin-top: 5px;
+  margin-bottom: 12px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.msg-actions.right {
+  justify-content: flex-end;
+}
+
+/* 复制按钮：鼠标移到这一条上才露出来 */
+.msg-group:hover .msg-actions {
+  opacity: 1;
+}
+
+.copy-btn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.copy-btn:hover {
+  background: var(--icon-hover-bg);
+  color: var(--fg);
+}
+
+.copy-btn.done {
+  color: #30d158;
+}
+
+/* 等待回答时的呼吸点 */
+.thinking {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 4px 0;
+}
+
+.thinking i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: ds-breathe 1.15s ease-in-out infinite;
+}
+
+.thinking i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.thinking i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes ds-breathe {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+/* ── 输入区 ─────────────────────────────────────────────── */
+
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  /* 设计稿：输入框距上边 10 */
+  padding: 10px;
+  gap: 16px;
+  -webkit-app-region: drag;
+}
+
+.input {
+  -webkit-app-region: no-drag;
+  flex: none;
+  width: 100%;
+  /* 一行 = 20 行高 + 上下各 4 内边距 = 28，与设计稿一致 */
+  min-height: 28px;
+  padding: 4px 0;
+
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+
+  resize: none;
+  overflow-y: hidden;
+  user-select: text;
+}
+
+.input::placeholder {
+  color: var(--placeholder);
+}
+
+.toolbar {
+  -webkit-app-region: no-drag;
+  flex: none;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 6px;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.tool-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--icon);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.tool-btn:hover {
+  background: var(--icon-hover-bg);
+}
+
+/* 设计稿：浅色是关闭状态，蓝色是开启状态 */
+.tool-btn[aria-pressed='true'] {
+  color: var(--icon-active);
+  background: var(--icon-active-bg);
+}
+
+.send-btn {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--send-bg);
+  color: #fff;
+  cursor: pointer;
+  transition: background 0.14s ease, filter 0.14s ease;
+}
+
+/* 设计稿：无内容时不可点击，且没有悬浮状态 */
+.send-btn:disabled {
+  background: var(--send-disabled-bg);
+  cursor: default;
+}
+
+.send-btn:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+.send-btn:not(:disabled):active {
+  filter: brightness(0.94);
+}
+
+.tool-btn:focus-visible,
+.send-btn:focus-visible,
+.tb-btn:focus-visible,
+.copy-btn:focus-visible {
+  outline: 2px solid #4d6bfe;
+  outline-offset: 1px;
+}
+
+/* ── 滚动条：macOS overlay 风格 ─────────────────────────── */
+
+.messages::-webkit-scrollbar,
+.input::-webkit-scrollbar {
+  width: 8px;
+}
+
+.messages::-webkit-scrollbar-thumb,
+.input::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.messages::-webkit-scrollbar-track,
+.input::-webkit-scrollbar-track {
+  background: transparent;
+}

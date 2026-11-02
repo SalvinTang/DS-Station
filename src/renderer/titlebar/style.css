@@ -1,0 +1,84 @@
+:root {
+  color-scheme: light dark;
+
+  --tb-bg: #f6f6f6;
+  --tb-fg: #55575f;
+  --tb-hover: rgba(0, 0, 0, 0.07);
+  --tb-active: rgba(0, 0, 0, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tb-bg: #232428;
+    --tb-fg: #c2c4cf;
+    --tb-hover: rgba(255, 255, 255, 0.1);
+    --tb-active: rgba(255, 255, 255, 0.16);
+  }
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  background: var(--tb-bg);
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+.titlebar {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  /* 左侧给系统红绿灯让位 */
+  padding: 0 12px 0 84px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  -webkit-app-region: drag;
+}
+
+@media (prefers-color-scheme: dark) {
+  .titlebar {
+    border-bottom-color: rgba(255, 255, 255, 0.07);
+  }
+}
+
+.spacer {
+  flex: 1;
+  height: 100%;
+}
+
+.icon-btn {
+  -webkit-app-region: no-drag;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--tb-fg);
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.icon-btn:hover {
+  background: var(--tb-hover);
+}
+
+.icon-btn:active {
+  background: var(--tb-active);
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid #4d6bfe;
+  outline-offset: 1px;
+}

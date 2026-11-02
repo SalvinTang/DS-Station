@@ -1,0 +1,56 @@
+{
+  "name": "ds-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DS Desktop —— DeepSeek macOS 桌面客户端（非官方）",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "node scripts/bump-build.mjs && electron-vite build",
+    "build:only": "electron-vite build",
+    "bump:build": "node scripts/bump-build.mjs",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "pack": "node scripts/dist.mjs --dir",
+    "dist": "node scripts/dist.mjs --dmg"
+  },
+  "build": {
+    "appId": "com.salvin.dsdesktop",
+    "productName": "DS Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "electronDist": "node_modules/electron/dist",
+    "artifactName": "DS-Desktop-${version}-${env.BUILD_NUMBER}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "DS Desktop ${version}"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "electron": "^44.7.2",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7"
+  }
+}
