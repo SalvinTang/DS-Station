@@ -449,6 +449,7 @@ function runQuickWindowSelfCheck(quick: QuickWindow | null): void {
 
           return {
             mode: app.dataset.mode,
+            contentEnter: app.classList.contains('content-enter'),
             appRegion: getComputedStyle(app).webkitAppRegion,
             messagesRegion: getComputedStyle(messages).webkitAppRegion,
             topbarRegion: getComputedStyle(topbar).webkitAppRegion,
@@ -473,5 +474,39 @@ function runQuickWindowSelfCheck(quick: QuickWindow | null): void {
       .then((r) => console.log('[自检] 界面状态:', JSON.stringify(r)))
   }, 9400)
 
+  // 有内容态隐藏再唤出：尺寸和位置应原样恢复
+  setTimeout(() => quick?.hide(), 9800)
+  setTimeout(() => quick?.show(), 10200)
+
   setTimeout(() => quick?.setMode('empty'), 10600)
+
+  // 拖动测试：模拟按住面板拖动 60×40，确认窗口真的跟着走、并且位置写进了配置
+  setTimeout(() => {
+    if (!quick) return
+    const before = quick.window.getBounds()
+    void quick.window.webContents
+      .executeJavaScript(
+        `(() => {
+          const app = document.getElementById('app')
+          const fire = (type, x, y) =>
+            app.dispatchEvent(new PointerEvent(type, {
+              bubbles: true, pointerId: 1, button: 0,
+              buttons: type === 'pointerup' ? 0 : 1,
+              screenX: x, screenY: y,
+            }))
+          fire('pointerdown', 900, 300)
+          fire('pointermove', 960, 340)
+          fire('pointerup', 960, 340)
+        })()`,
+      )
+      .then(() => {
+        setTimeout(() => {
+          console.log(
+            '[自检] 拖动测试:',
+            JSON.stringify({ before, after: quick.window.getBounds() }),
+          )
+          console.log('[自检] 位置记忆:', JSON.stringify(load().quickWindow))
+        }, 300)
+      })
+  }, 11200)
 }

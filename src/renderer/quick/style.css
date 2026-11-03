@@ -85,13 +85,11 @@ body {
 }
 
 /*
- * ⚠️ 千万不要在 .app 上加 -webkit-app-region: drag。
+ * ⚠️ 不要用 -webkit-app-region: drag。
  *
- * Electron 的拖拽区域会**吞掉鼠标事件** —— 滚轮、hover、click 都到不了页面。
- * 一旦整块应用都是拖拽区，表现就是：消息区滚不动、悬停不出现复制按钮、
- * 顶栏也永远等不到 mouseenter。
- *
- * 所以只在真正「空」的地方开拖拽：顶栏（出现时）和输入区的留白。
+ * 它会把拖拽区域内的鼠标事件全部吞掉（滚轮、hover、click 都到不了页面），
+ * 而且在透明窗口上不稳定。拖动改为 main.ts 里的 pointer 事件 + IPC 手动实现：
+ * 按住面板上没有被控件遮挡的地方都能拖。
  */
 .app {
   position: relative;
@@ -100,6 +98,8 @@ body {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--frame-border);
+  /* 形态切换时底色和圆角平滑过渡，配合窗口展开动画 */
+  transition: background-color 0.26s ease, border-radius 0.26s ease;
 }
 
 .app[data-mode='empty'] {
@@ -137,10 +137,6 @@ body {
   color: var(--topbar-fg);
   border-radius: 29px 29px 0 0;
 
-  /* 隐藏时**不是**拖拽区 —— 否则鼠标从顶部进入时事件被吞，
-     mouseenter 永远不触发，顶栏就再也出不来了 */
-  -webkit-app-region: no-drag;
-
   /* 鼠标移入才出现（设计稿）。1 秒后自动隐藏由 main.ts 控制 */
   opacity: 0;
   pointer-events: none;
@@ -150,8 +146,6 @@ body {
 .app[data-mode='content'] .topbar.show {
   opacity: 1;
   pointer-events: auto;
-  /* 出现之后它才是拖拽手柄 */
-  -webkit-app-region: drag;
 }
 
 /* 空态没有顶栏 */
@@ -164,7 +158,6 @@ body {
 }
 
 .tb-btn {
-  -webkit-app-region: no-drag;
   width: 30px;
   height: 30px;
   display: grid;
@@ -184,12 +177,12 @@ body {
 /* ── 对话区 ─────────────────────────────────────────────── */
 
 .messages {
-  /* 明确声明不是拖拽区，滚轮和 hover 才能正常工作 */
-  -webkit-app-region: no-drag;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* 展开动画期间先藏起来，动画结束再淡入 */
+  transition: opacity 0.22s ease;
   /* 外框 1px 描边之内再留 9px，视觉上距窗口边缘 10px */
   padding: 9px 9px 0;
 }
@@ -322,7 +315,8 @@ body {
   display: flex;
   flex-direction: column;
   padding: 15px 10px 9px 13px;
-  -webkit-app-region: drag;
+  /* 展开动画期间先藏起来，动画结束再淡入 */
+  transition: opacity 0.22s ease;
 }
 
 /* 空态：整个窗口就是输入框，描边和圆角由 .app 负责 */
@@ -341,8 +335,13 @@ body {
   background: var(--composer-bg);
 }
 
+/* 展开动画进行中：只显示外框，内容等动画结束再淡入 */
+.app.content-enter .messages,
+.app.content-enter .composer {
+  opacity: 0;
+}
+
 .input {
-  -webkit-app-region: no-drag;
   flex: none;
   width: 100%;
   /* 一行 = 22 行高 + 上下各 3 内边距 = 28，与设计稿一致 */
@@ -368,7 +367,6 @@ body {
 }
 
 .toolbar {
-  -webkit-app-region: no-drag;
   flex: none;
   height: 36px;
   margin-top: auto;

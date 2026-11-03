@@ -70,6 +70,7 @@ export class QuickWindow {
   /** 展开动画 */
   private animating = false
   private animationTimer: NodeJS.Timeout | null = null
+  private animationTarget: Rectangle | null = null
 
   /** 缩放落盘防抖 */
   private sizeSaveTimer: NodeJS.Timeout | null = null
@@ -176,6 +177,16 @@ export class QuickWindow {
 
   hide(): void {
     if (!this.visible) return
+
+    // 如果动画还没播完就被收起，直接跳到终态，
+    // 否则会把中间尺寸当成「用户调过的大小」记下来
+    const pendingTarget = this.animationTarget
+    if (this.animating && pendingTarget) {
+      this.cancelAnimation()
+      this.window.setBounds(pendingTarget)
+      this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
+      this.sendEvent({ type: 'transition-done' })
+    }
 
     // 记录这次消失的位置：用户关闭、快捷键关闭、Esc 都会走这里
     this.persistBounds()
@@ -378,6 +389,7 @@ export class QuickWindow {
     const targetBottom = target.y + target.height
     const startedAt = Date.now()
     this.animating = true
+    this.animationTarget = target
 
     this.animationTimer = setInterval(() => {
       const elapsed = Date.now() - startedAt
@@ -417,6 +429,7 @@ export class QuickWindow {
     if (!this.animating) return
 
     this.animating = false
+    this.animationTarget = null
     if (this.animationTimer) {
       clearInterval(this.animationTimer)
       this.animationTimer = null
@@ -427,7 +440,11 @@ export class QuickWindow {
     this.bottomY = bounds.y + bounds.height
     this.persistBounds()
 
-    console.log('[快捷窗口] 展开完成，内容淡入')
+    const min = this.window.getMinimumSize()
+    console.log(
+      `[快捷窗口] 展开完成 (${bounds.x}, ${bounds.y}) ${bounds.width}×${bounds.height}，` +
+        `最小 ${min[0]}×${min[1]}，内容淡入`,
+    )
     this.sendEvent({ type: 'transition-done' })
   }
 
@@ -437,6 +454,7 @@ export class QuickWindow {
       this.animationTimer = null
     }
     this.animating = false
+    this.animationTarget = null
   }
 
   /** 把当前位置/尺寸写回配置 */
@@ -447,6 +465,8 @@ export class QuickWindow {
       bottom: bounds.y + bounds.height,
     }
     if (this.mode === 'content') {
+      // 同步内存里的尺寸：用户缩放后马上收起时，防抖可能还没跑完
+      this.contentSize = { width: bounds.width, height: bounds.height }
       patch.contentWidth = bounds.width
       patch.contentHeight = bounds.height
     }

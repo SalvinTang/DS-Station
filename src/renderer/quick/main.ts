@@ -401,7 +401,11 @@ app.addEventListener('pointerdown', (event) => {
   if (target?.closest('button, textarea, input, select, a, .messages')) return
 
   dragOrigin = { x: event.screenX, y: event.screenY }
-  app.setPointerCapture(event.pointerId)
+  try {
+    app.setPointerCapture(event.pointerId)
+  } catch {
+    // 合成事件下没有活跃指针，捕获失败不影响拖动本身
+  }
   window.ds?.beginWindowDrag(event.screenX, event.screenY)
   showTopbar()
   event.preventDefault()
@@ -415,7 +419,11 @@ app.addEventListener('pointermove', (event) => {
 function endWindowDrag(event: PointerEvent): void {
   if (!dragOrigin) return
   dragOrigin = null
-  if (app.hasPointerCapture(event.pointerId)) app.releasePointerCapture(event.pointerId)
+  try {
+    if (app.hasPointerCapture(event.pointerId)) app.releasePointerCapture(event.pointerId)
+  } catch {
+    // 忽略
+  }
   window.ds?.endWindowDrag()
 }
 
