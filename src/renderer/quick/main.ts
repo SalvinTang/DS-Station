@@ -226,6 +226,7 @@ function applyMode(next: QuickMode): void {
     clearMessages()
     topbar.classList.remove('show')
     app.classList.remove('content-enter')
+    app.classList.remove('content-leave')
     input.value = ''
   }
 
@@ -249,18 +250,21 @@ function submit(): void {
   const text = input.value.trim()
   if (!text || busy) return
 
-  const payload: QuickSubmitPayload = {
-    text,
-    deepThink: isPressed(deepThinkButton),
-    smartSearch: isPressed(smartSearchButton),
-  }
-
   /*
    * 空态 → 有内容态：主进程会把窗口下移再向上长高。
    * 这期间先把内容藏起来，等主进程发来 transition-done 再淡入 ——
    * 效果就是「外框先撑开，内容再出现」。
    */
   const enteringContent = mode === 'empty'
+
+  const payload: QuickSubmitPayload = {
+    text,
+    deepThink: isPressed(deepThinkButton),
+    smartSearch: isPressed(smartSearchButton),
+    // 空态发出的消息 = 新对话的第一条，主进程会先开新会话
+    startNewChat: enteringContent,
+  }
+
   if (enteringContent) {
     app.classList.add('content-enter')
     // 兜底：万一没收到 transition-done，也不要把内容永久藏着
@@ -276,6 +280,8 @@ function submit(): void {
   input.value = ''
   autosize()
   syncSendState()
+  // 发送后光标离开输入框：面板接下来是「看回答」的状态
+  input.blur()
 
   window.ds?.submitQuickMessage(payload)
 }
@@ -300,8 +306,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       streamingBody = null
       busy = false
       syncSendState()
-      // 焦点收回输入框，方便接着追问
-      input.focus()
+      // 不再自动把焦点放回输入框 —— 用户要接着问会自己点
       break
     }
 
@@ -386,7 +391,12 @@ app.addEventListener('mousemove', showTopbar)
 app.addEventListener('mouseleave', scheduleTopbarHide)
 
 tbClose?.addEventListener('click', () => window.ds?.hideQuickWindow())
-tbNewChat?.addEventListener('click', () => window.ds?.quickNewChat())
+tbNewChat?.addEventListener('click', () => {
+  // 收起动画：内容先淡出，等主进程把窗口收回去、发来 mode-changed 再切空态
+  app.classList.add('content-leave')
+  window.setTimeout(() => app.classList.remove('content-leave'), 1500)
+  window.ds?.quickNewChat()
+})
 tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
 
 // ── 拖动窗口 ──────────────────────────────────────────────────

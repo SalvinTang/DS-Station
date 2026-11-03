@@ -341,6 +341,13 @@ body {
   opacity: 0;
 }
 
+/* 收起动画进行中：内容先淡出，窗口随后收回空态 */
+.app.content-leave .messages,
+.app.content-leave .composer,
+.app.content-leave .topbar {
+  opacity: 0;
+}
+
 .input {
   flex: none;
   width: 100%;

@@ -26,6 +26,12 @@ export interface QuickSubmitPayload {
   deepThink: boolean
   /** 「智能搜索」开关 */
   smartSearch: boolean
+  /**
+   * 面板当时是空态（没有对话内容）。
+   * 空态发出第一条消息必须**新开一个 DeepSeek 对话**，
+   * 不能接着主窗口里正在看的那个会话往下写。
+   */
+  startNewChat: boolean
 }
 
 export interface HotkeyUpdateResult {

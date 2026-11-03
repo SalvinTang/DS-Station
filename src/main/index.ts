@@ -90,6 +90,18 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_SETTINGS_TEST === '1') {
       runSettingsSelfCheck()
     }
+
+    // 端到端对话自检：真的往 DeepSeek 发一条消息，盯页面和快捷窗口的变化
+    // ★ 会往账号里发一条测试消息
+    if (process.env.DS_CHAT_TEST === '1') {
+      void runChatSelfCheck(mainWindow, quickWindow)
+    }
+
+    // 「新对话」按钮自检：发一条、点新对话、再发一条，看会话 URL 有没有变
+    // ★ 会往账号里发两条测试消息
+    if (process.env.DS_NEWCHAT_TEST === '1') {
+      void runNewChatSelfCheck(mainWindow, quickWindow)
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -265,21 +277,43 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
   const page = new DeepSeekPage(win.pageView)
 
   try {
+    /*
+     * 空态发出的消息 = 新对话的第一条。
+     * 必须先把 DeepSeek 切到新会话，否则会接着主窗口里正在看的会话写。
+     * 刚启动时页面可能还没就绪，所以输入框用重试的方式等它出现。
+     */
+    if (payload.startNewChat) {
+      const started = await page.startNewChat()
+      console.log(`[快捷窗口] 空态发送，开新对话 → ${started ? '成功' : '没找到按钮，直接发'}`)
+      await delay(600)
+    }
+
     await page.setSwitch('deepThinkToggle', payload.deepThink)
     await page.setSwitch('smartSearchToggle', payload.smartSearch)
 
-    if (!(await page.setComposerText(payload.text))) {
-      throw new Error('没找到输入框，页面可能还没加载好')
+    let typed = false
+    for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
+      typed = await page.setComposerText(payload.text)
+      if (!typed) await delay(500)
     }
+    if (!typed) throw new Error('没找到输入框，页面可能还没加载好')
 
     // 给页面一点时间跑完它自己的状态更新，再点发送
     await delay(350)
+
+    // ★ 发送前记下「当前最后一条回答」。发送后只要它的文本变了，就是新回答。
+    //   不能只看数量 —— 首次启动时旧会话里本来就有回答。
+    const baseline = await page.listAnswers()
+    console.log(`[快捷窗口] 发送前已有 ${baseline.length} 条回答`)
 
     if (!(await page.clickSend())) {
       throw new Error('没找到发送按钮')
     }
 
     quick.sendEvent({ type: 'answer-start' })
+
+    const appeared = await page.waitForAnswerChange(baseline)
+    if (!appeared) throw new Error('等不到新的回答')
 
     const got = await page.streamLastAnswer((text) => {
       quick.sendEvent({ type: 'answer-update', text })
@@ -301,12 +335,18 @@ async function startNewChatOnPage(): Promise<void> {
   const win = mainWindow
   if (!win) return
 
-  const page = new DeepSeekPage(win.pageView)
-  await page.startNewChat()
-  await delay(300)
-
-  quickWindow?.sendEvent({ type: 'conversation-cleared' })
+  // 面板立刻开始收起（反向动画）；页面那边并行去开新对话，
+  // 动画结束时 setMode 会通知界面清空并切回空态。
   quickWindow?.setMode('empty')
+
+  const page = new DeepSeekPage(win.pageView)
+  const started = await page.startNewChat()
+  console.log(
+    `[快捷窗口] 新对话 → ${started ? '成功' : '没找到按钮'}，URL: ${win.pageView.webContents.getURL()}`,
+  )
+
+  await delay(500)
+  console.log(`[快捷窗口] 新对话后 URL: ${win.pageView.webContents.getURL()}`)
 }
 
 // ── 开发辅助 ────────────────────────────────────────────────────
@@ -411,6 +451,155 @@ function runSettingsSelfCheck(): void {
       rebuildMenu()
     })()
   }, 4000)
+}
+
+/**
+ * 「新对话」按钮自检：发一条 → 点顶栏新对话 → 再发一条，
+ * 对比三次的会话 URL，确认确实换了会话。
+ *
+ * ★ 会真的往当前登录的 DeepSeek 账号发两条消息。
+ */
+async function runNewChatSelfCheck(
+  win: MainWindow | null,
+  quick: QuickWindow | null,
+): Promise<void> {
+  if (!win || !quick) return
+
+  const sendViaPanel = async (text: string): Promise<void> => {
+    await quick.window.webContents.executeJavaScript(`(() => {
+      const input = document.getElementById('input')
+      input.value = ${JSON.stringify(text)}
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.getElementById('send').click()
+    })()`)
+  }
+
+  const panelState = (): Promise<unknown> =>
+    quick.window.webContents.executeJavaScript(`(() => ({
+      mode: document.getElementById('app').dataset.mode,
+      groups: document.getElementById('messagesInner').children.length,
+      text: (document.getElementById('messagesInner').innerText || '').replace(/\\s+/g, ' ').slice(0, 40),
+    }))()`)
+
+  await delay(8000)
+  console.log('[新对话测试] 起始 URL:', win.pageView.webContents.getURL())
+
+  quick.show()
+  await delay(1500)
+
+  await sendViaPanel('自动化测试-新对话-A：用一句话说明什么是 Electron。')
+  await delay(10_000)
+  console.log('[新对话测试] 第一条后 URL:', win.pageView.webContents.getURL())
+  console.log('[新对话测试] 第一条后面板:', JSON.stringify(await panelState()))
+
+  // 点顶栏最右边的「新对话」
+  await quick.window.webContents.executeJavaScript(
+    `document.getElementById('tbNewChat').click()`,
+  )
+  await delay(3000)
+  console.log('[新对话测试] 点新对话后 URL:', win.pageView.webContents.getURL())
+  console.log('[新对话测试] 点新对话后面板:', JSON.stringify(await panelState()))
+
+  await sendViaPanel('自动化测试-新对话-B：用一句话说明什么是 Vite。')
+  await delay(10_000)
+  console.log('[新对话测试] 第二条后 URL:', win.pageView.webContents.getURL())
+  console.log('[新对话测试] 第二条后面板:', JSON.stringify(await panelState()))
+}
+
+/**
+ * 端到端对话自检：发送一条真实消息，盯住
+ *   1. 页面里的回答列表有没有变化
+ *   2. 快捷窗口有没有收到 answer-update
+ *   3. 内容态隐藏再唤出后，界面上的消息还在不在
+ *
+ * ★ 会真的往当前登录的 DeepSeek 账号发一条消息。
+ */
+async function runChatSelfCheck(
+  win: MainWindow | null,
+  quick: QuickWindow | null,
+): Promise<void> {
+  if (!win || !quick) return
+  const page = new DeepSeekPage(win.pageView)
+
+  await delay(8000)
+  console.log('[对话测试] 页面 URL:', win.pageView.webContents.getURL())
+  console.log('[对话测试] 发送前回答:', JSON.stringify(await page.listAnswers()))
+
+  quick.show()
+  await delay(1500)
+
+  console.log('[对话测试] 触发发送（深度思考=' + (process.env.DS_CHAT_DEEP === '1') + '）')
+  await quick.window.webContents.executeJavaScript(`(() => {
+    const input = document.getElementById('input')
+    input.value = '自动化测试：用一句话说明什么是 Electron。'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    if (${process.env.DS_CHAT_DEEP === '1'}) {
+      document.getElementById('deepThink').setAttribute('aria-pressed', 'true')
+    }
+    document.getElementById('send').click()
+  })()`)
+
+  // 模拟用户行为：发出去一会儿没等到回答就收起面板（主窗口也隐藏 → app.hide）
+  const earlyHide = process.env.DS_CHAT_EARLY_HIDE === '1'
+  if (earlyHide) {
+    await delay(1500)
+    win.window.hide()
+    quick.hide()
+    console.log('[对话测试] 已提前收起面板（主窗口隐藏）')
+  }
+
+  const started = Date.now()
+  let lastKey = ''
+  let lastText = ''
+  while (Date.now() - started < 45_000) {
+    const answers = await page.listAnswers()
+    const text = answers.length ? answers[answers.length - 1] : ''
+    const key = `${answers.length}:${text.length}`
+    if (key !== lastKey) {
+      lastKey = key
+      lastText = text
+      console.log(
+        `[对话测试] +${((Date.now() - started) / 1000).toFixed(1)}s ` +
+          `answers=${answers.length} lastLen=${text.length}`,
+      )
+    }
+    await delay(500)
+  }
+  console.log('[对话测试] 页面最后一条回答:', JSON.stringify(lastText.slice(0, 80)))
+
+  if (earlyHide) {
+    win.show()
+    quick.show()
+    await delay(1500)
+  }
+
+  const readDom = async (): Promise<unknown> =>
+    quick.window.webContents.executeJavaScript(`(() => ({
+      mode: document.getElementById('app').dataset.mode,
+      contentEnter: document.getElementById('app').classList.contains('content-enter'),
+      groups: document.getElementById('messagesInner').children.length,
+      text: (document.getElementById('messagesInner').innerText || '').replace(/\\s+/g, ' ').slice(0, 100),
+      active: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : 'none',
+    }))()`)
+
+  console.log('[对话测试] 快捷窗口 DOM:', JSON.stringify(await readDom()))
+
+  // 场景 A：主窗口还在 → 收起面板不会 app.hide()
+  quick.hide()
+  await delay(1200)
+  quick.show()
+  await delay(1200)
+  console.log('[对话测试] 隐藏再显示后:', JSON.stringify(await readDom()))
+
+  // 场景 B：主窗口已隐藏 → 收起面板会 app.hide()，再唤出
+  win.window.hide()
+  await delay(600)
+  quick.hide()
+  await delay(1500)
+  quick.show()
+  await delay(1500)
+  console.log('[对话测试] 主窗口隐藏后唤出:', JSON.stringify(await readDom()))
+  win.show()
 }
 
 /** 走一遍快捷窗口的完整生命周期 */

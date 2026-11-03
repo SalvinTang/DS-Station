@@ -117,16 +117,40 @@ export class DeepSeekPage {
     )
   }
 
-  /** 开启新对话 */
+  /**
+   * 开启新对话。
+   *
+   * 主窗口宽度较窄时 DeepSeek 会把左侧栏收起来，「开启新对话」在屏幕外，
+   * `dsFindByText` 只认可见元素，所以直接找是找不到的。
+   * 这时先点左上角的侧栏开关，等侧栏展开后再点一次。
+   */
   async startNewChat(): Promise<boolean> {
-    return (
-      (await this.run<boolean>(`
+    const clickVisible = (): Promise<boolean | null> =>
+      this.run<boolean>(`
         const btn = dsFind('newChat');
         if (!btn) return false;
-        btn.click();
+        // 点击处理挂在内层 span 上，点外层 div 没反应
+        dsDeepest(btn).click();
         return true;
-      `)) === true
-    )
+      `)
+
+    if ((await clickVisible()) === true) return true
+
+    const opened = await this.run<boolean>(`
+      const btn = Array.from(document.querySelectorAll('[role="button"], button')).find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width >= 30 && r.height >= 30 && r.x >= 0 && r.x < 70 && r.y < 80;
+      });
+      if (!btn) return false;
+      btn.click();
+      return true;
+    `)
+
+    if (opened !== true) return false
+
+    // 侧栏展开有过渡动画
+    await delay(500)
+    return (await clickVisible()) === true
   }
 
   // ── 开关状态 ──────────────────────────────────────────────────
@@ -187,6 +211,26 @@ export class DeepSeekPage {
     while (Date.now() < deadline) {
       const answers = await this.listAnswers()
       if (answers.length > baseline) return true
+      await delay(POLL_INTERVAL)
+    }
+    return false
+  }
+
+  /**
+   * 等「这一轮的新回答」真正出现。
+   *
+   * 不能用数量判断：首次启动时主窗口可能停在旧会话或首页，本来就有内容；
+   * 而发送后页面跳转到新会话的瞬间又会短暂返回空数组。
+   * 比较**最后一条回答的文本**最稳 —— 只要它跟发送前不一样，就是新的。
+   */
+  async waitForAnswerChange(baseline: string[], timeoutMs = 45000): Promise<boolean> {
+    const baseLast = baseline.length ? baseline[baseline.length - 1] : ''
+    const deadline = Date.now() + timeoutMs
+
+    while (Date.now() < deadline) {
+      const answers = await this.listAnswers()
+      const last = answers.length ? answers[answers.length - 1] : ''
+      if (last && last !== baseLast) return true
       await delay(POLL_INTERVAL)
     }
     return false

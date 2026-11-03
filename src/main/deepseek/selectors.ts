@@ -144,6 +144,27 @@ export function pagePrelude(): string {
     };
 
     /**
+     * 从 el 往下钻到真正承载这段文字的最深层元素。
+     *
+     * DeepSeek 有些按钮的点击处理挂在内层 span 上，点外层 div 毫无反应
+     * （「开启新对话」就是典型）。点击内层元素同样会冒泡到外层的处理函数，
+     * 所以钻到最深层最稳。
+     */
+    const dsDeepest = (el) => {
+      const text = dsText(el);
+      let node = el;
+      for (let depth = 0; depth < 8; depth++) {
+        let next = null;
+        for (const child of node.children) {
+          if (dsText(child) === text) { next = child; break; }
+        }
+        if (!next) break;
+        node = next;
+      }
+      return node;
+    };
+
+    /**
      * 发送按钮：先看输入框周边那个实心圆形按钮，
      * 那儿是唯一会随着输入框状态一起禁用/启用的元素。
      */

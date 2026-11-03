@@ -123,6 +123,13 @@ export class MainWindow {
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
+        /*
+         * ★ 主窗口隐藏时（用户关掉主窗口、只留快捷窗口），这个网页仍然要
+         *   继续跑：回答的 DOM 是快捷窗口的数据源。默认的后台节流会把
+         *   隐藏页面的渲染/定时器压到很低，导致回答迟迟不出现在 DOM 里，
+         *   快捷窗口就“等不到回答”。这里必须关掉节流。
+         */
+        backgroundThrottling: false,
         // 刻意不设 preload：远程页面不该拿到任何本地能力
       },
     })

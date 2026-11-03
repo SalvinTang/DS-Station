@@ -72,6 +72,9 @@ export class QuickWindow {
   private animationTimer: NodeJS.Timeout | null = null
   private animationTarget: Rectangle | null = null
 
+  /** 展开前空态窗口的底边，收回空态时用它做反向动画的落点 */
+  private preExpandBottom: number | null = null
+
   /** 缩放落盘防抖 */
   private sizeSaveTimer: NodeJS.Timeout | null = null
 
@@ -184,9 +187,17 @@ export class QuickWindow {
     if (this.animating && pendingTarget) {
       this.cancelAnimation()
       this.window.setBounds(pendingTarget)
-      this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
+      if (this.mode === 'content') {
+        this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
+      } else {
+        this.window.setMinimumSize(0, 0)
+      }
+      this.sendEvent({ type: 'mode-changed', mode: this.mode })
       this.sendEvent({ type: 'transition-done' })
     }
+
+    // 位置可能已经变了，下次展开重新记录反向动画的落点
+    this.preExpandBottom = null
 
     // 记录这次消失的位置：用户关闭、快捷键关闭、Esc 都会走这里
     this.persistBounds()
@@ -225,6 +236,8 @@ export class QuickWindow {
   beginDrag(mouseX: number, mouseY: number): void {
     const bounds = this.window.getBounds()
     this.dragOrigin = { mouseX, mouseY, x: bounds.x, y: bounds.y }
+    // 用户手动挪过窗口，展开前的位置不再有效
+    this.preExpandBottom = null
   }
 
   moveDrag(mouseX: number, mouseY: number): void {
@@ -262,34 +275,54 @@ export class QuickWindow {
         this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
         this.sendEvent({ type: 'transition-done' })
       }
-    } else {
-      this.cancelAnimation()
-      this.window.setMinimumSize(0, 0)
-      this.window.setResizable(false)
 
-      // 收回空态：宽度回到 400 并水平居中，底边不动
-      const bounds = this.window.getBounds()
-      this.currentHeight = QUICK_WINDOW_MIN_HEIGHT
-      this.bottomY = bounds.y + bounds.height
-      this.window.setBounds({
-        x: Math.round(bounds.x + (bounds.width - QUICK_WINDOW_WIDTH) / 2),
-        y: this.bottomY - this.currentHeight,
-        width: QUICK_WINDOW_WIDTH,
-        height: this.currentHeight,
-      })
-      this.sendEvent({ type: 'transition-done' })
+      this.logBounds(mode)
+      this.sendEvent({ type: 'mode-changed', mode })
+      return
     }
 
+    // ── 收回空态 ─────────────────────────────────────────────
+    this.cancelAnimation()
+    this.window.setMinimumSize(0, 0)
+    this.window.setResizable(false)
+
+    const bounds = this.window.getBounds()
+    this.currentHeight = QUICK_WINDOW_MIN_HEIGHT
+    this.bottomY = bounds.y + bounds.height
+
+    // 有内容态收回空态时，落回展开前的底边（反向动画）
+    const bottom = this.preExpandBottom ?? this.bottomY
+    const target: Rectangle = {
+      x: Math.round(bounds.x + (bounds.width - QUICK_WINDOW_WIDTH) / 2),
+      y: Math.round(bottom - QUICK_WINDOW_MIN_HEIGHT),
+      width: QUICK_WINDOW_WIDTH,
+      height: QUICK_WINDOW_MIN_HEIGHT,
+    }
+
+    if (previous === 'content' && this.visible) {
+      // 反向：先把高度收掉，再整体上移收窄；结束后才通知界面切空态
+      this.animateCollapse(bounds, target)
+    } else {
+      this.window.setBounds(target)
+      this.logBounds(mode)
+      this.sendEvent({ type: 'mode-changed', mode })
+    }
+  }
+
+  private logBounds(mode: QuickMode): void {
     const { x, y, width, height } = this.window.getBounds()
     console.log(`[快捷窗口] 切到「${mode}」态：(${x}, ${y})，${width}×${height}`)
-
-    // 通知界面。否则会出现「窗口已经是 420×500，界面还以为在空态」
-    // 这种两边状态不一致的情况 —— 顶栏就会永远不出现。
-    this.sendEvent({ type: 'mode-changed', mode })
   }
 
   /** 向快捷窗口界面推事件 */
   sendEvent(event: QuickEvent): void {
+    if (process.env.DS_CHAT_TEST === '1') {
+      const summary =
+        event.type === 'answer-update'
+          ? `answer-update(${event.text.length} 字)`
+          : JSON.stringify(event)
+      console.log('[对话测试] 推给面板:', summary)
+    }
     this.send('ds:quick-event', event)
   }
 
@@ -390,6 +423,7 @@ export class QuickWindow {
     const startedAt = Date.now()
     this.animating = true
     this.animationTarget = target
+    this.preExpandBottom = startBottom
 
     this.animationTimer = setInterval(() => {
       const elapsed = Date.now() - startedAt
@@ -446,6 +480,71 @@ export class QuickWindow {
         `最小 ${min[0]}×${min[1]}，内容淡入`,
     )
     this.sendEvent({ type: 'transition-done' })
+  }
+
+  /**
+   * 收回空态：展开动画的反方向。
+   * 阶段一（280ms）：高度一路收掉，顶边往下走、底边不动；
+   * 阶段二（140ms）：整体上移回展开前的底边，宽度 420 → 400。
+   */
+  private animateCollapse(from: Rectangle, target: Rectangle): void {
+    this.cancelAnimation()
+
+    const startBottom = from.y + from.height
+    const targetBottom = target.y + target.height
+    const startedAt = Date.now()
+    this.animating = true
+    this.animationTarget = target
+
+    this.animationTimer = setInterval(() => {
+      const elapsed = Date.now() - startedAt
+
+      if (elapsed < PHASE_GROW_MS) {
+        const k = easeOut(elapsed / PHASE_GROW_MS)
+        const height = Math.round(lerp(from.height, target.height, k))
+        this.window.setBounds({
+          x: from.x,
+          y: startBottom - height,
+          width: from.width,
+          height,
+        })
+        return
+      }
+
+      if (elapsed < PHASE_GROW_MS + PHASE_MOVE_MS) {
+        const k = easeOut((elapsed - PHASE_GROW_MS) / PHASE_MOVE_MS)
+        const bottom = Math.round(lerp(startBottom, targetBottom, k))
+        this.window.setBounds({
+          x: Math.round(lerp(from.x, target.x, k)),
+          y: bottom - target.height,
+          width: Math.round(lerp(from.width, target.width, k)),
+          height: target.height,
+        })
+        return
+      }
+
+      this.finishCollapse(target)
+    }, FRAME_MS)
+  }
+
+  private finishCollapse(target: Rectangle): void {
+    if (!this.animating) return
+
+    this.animating = false
+    this.animationTarget = null
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer)
+      this.animationTimer = null
+    }
+
+    this.window.setBounds(target)
+    this.bottomY = target.y + target.height
+    this.preExpandBottom = null
+    this.persistBounds()
+
+    this.logBounds('empty')
+    // 动画结束再让界面切空态：清掉消息、去掉淡出样式
+    this.sendEvent({ type: 'mode-changed', mode: 'empty' })
   }
 
   private cancelAnimation(): void {
