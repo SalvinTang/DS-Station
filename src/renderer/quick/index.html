@@ -15,34 +15,36 @@
         顶部功能栏：鼠标移入才出现，移出 2 秒后隐藏（设计稿）。
         它是**浮在消息区上面**的绝对定位层，不占布局高度 ——
         所以收起来之后，下面的文字会自然顶上来。
-        布局：左「关闭 扩大」，右「新对话」。
+        布局：左「关闭」，右「扩大 / 新对话」。
       -->
       <header class="topbar" id="topbar">
-        <button id="tbClose" class="tb-btn" type="button" title="关闭" aria-label="关闭">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
-               stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-            <path d="M18 6L6 18" />
-            <path d="M6 6l12 12" />
-          </svg>
-        </button>
-
-        <button id="tbExpand" class="tb-btn" type="button" title="在主窗口打开" aria-label="在主窗口打开">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor"
-               stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M15 3h6v6" />
-            <path d="M9 21H3v-6" />
-            <path d="M21 3l-7 7" />
-            <path d="M3 21l7-7" />
+        <button id="tbClose" class="tb-btn tb-close" type="button" title="关闭" aria-label="关闭">
+          <svg viewBox="0 0 1024 1024" width="18" height="18" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M512 1024A512 512 0 1 1 512 0a512 512 0 0 1 0 1024zM305.956571 370.395429L447.488 512 305.956571 653.604571a45.568 45.568 0 1 0 64.438858 64.438858L512 576.512l141.604571 141.531429a45.568 45.568 0 0 0 64.438858-64.438858L576.512 512l141.531429-141.604571a45.568 45.568 0 1 0-64.438858-64.438858L512 447.488 370.395429 305.956571a45.568 45.568 0 0 0-64.438858 64.438858z"
+            />
           </svg>
         </button>
 
         <div class="spacer"></div>
 
-        <button id="tbNewChat" class="tb-btn" type="button" title="新对话" aria-label="新对话">
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
-               stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-            <path d="M12 5v14" />
-            <path d="M5 12h14" />
+        <button id="tbExpand" class="tb-btn tb-expand" type="button" title="在主窗口打开" aria-label="在主窗口打开">
+          <svg viewBox="0 0 1024 1024" width="16" height="16" aria-hidden="true">
+            <path
+              fill="currentColor"
+              d="M160.956606 0h116.959605a43.887282 43.887282 0 0 1 0 87.774563H160.956606A73.182042 73.182042 0 0 0 87.774563 160.956606v116.959605a43.887282 43.887282 0 0 1-87.774563 0V160.956606A160.956606 160.956606 0 0 1 160.956606 0z m0 1024h116.959605a43.887282 43.887282 0 0 0 0-87.774563H160.956606A73.182042 73.182042 0 0 1 87.774563 863.153113V746.083789a43.887282 43.887282 0 0 0-87.774563 0v117.069324a160.846887 160.846887 0 0 0 160.956606 160.846887z m702.196507 0H746.083789a43.887282 43.887282 0 0 1 0-87.774563h117.069324a73.072324 73.072324 0 0 0 73.072324-73.072324V746.083789a43.887282 43.887282 0 0 1 87.774563 0v117.069324a160.846887 160.846887 0 0 1-160.846887 160.846887z m0-1024H746.083789a43.887282 43.887282 0 0 0 0 87.774563h117.069324a73.182042 73.182042 0 0 1 73.072324 73.182043v116.959605a43.887282 43.887282 0 0 0 87.774563 0V160.956606A160.846887 160.846887 0 0 0 863.153113 0z"
+            />
+          </svg>
+        </button>
+
+        <button id="tbNewChat" class="tb-btn tb-new-chat" type="button" title="新对话" aria-label="新对话">
+          <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true">
+            <path
+              fill="currentColor"
+              fill-rule="evenodd"
+              d="M8 0.599609C3.91309 0.599609 0.599609 3.91309 0.599609 8C0.599609 9.13376 0.855461 10.2098 1.3125 11.1719L1.5918 11.7588L2.76562 11.2012L2.48633 10.6143C2.11034 9.82278 1.90039 8.93675 1.90039 8C1.90039 4.63106 4.63106 1.90039 8 1.90039C11.3689 1.90039 14.0996 4.63106 14.0996 8C14.0996 11.3689 11.3689 14.0996 8 14.0996C7.31041 14.0996 6.80528 14.0514 6.35742 13.9277C5.91623 13.8059 5.49768 13.6021 4.99707 13.2529C4.26492 12.7422 3.21611 12.5616 2.35156 13.1074L2.33789 13.1162L2.32422 13.126L1.58789 13.6436L2.01953 14.9297L3.0459 14.207C3.36351 14.0065 3.83838 14.0294 4.25293 14.3184C4.84547 14.7317 5.39743 15.011 6.01172 15.1807C6.61947 15.3485 7.25549 15.4004 8 15.4004C12.0869 15.4004 15.4004 12.0869 15.4004 8C15.4004 3.91309 12.0869 0.599609 8 0.599609ZM7.34473 4.93945V7.34961H4.93945V8.65039H7.34473V11.0605H8.64551V8.65039H11.0605V7.34961H8.64551V4.93945H7.34473Z"
+            />
           </svg>
         </button>
       </header>
@@ -52,13 +54,13 @@
         <div class="messages-inner" id="messagesInner"></div>
       </div>
 
-      <!-- ── 输入区 ── -->
+      <!-- ── 输入区：空态时它就是整个外框 ── -->
       <div class="composer">
         <textarea
           id="input"
           class="input"
           rows="1"
-          placeholder="给DeepSeek发送消息"
+          placeholder="给Deepseek发送消息"
           spellcheck="false"
           autocomplete="off"
         ></textarea>
@@ -66,30 +68,52 @@
         <div class="toolbar">
           <button id="deepThink" class="tool-btn" type="button" aria-pressed="false"
                   title="深度思考" aria-label="深度思考">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
-                 stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 3.5l1.85 4.9 4.9 1.85-4.9 1.85L12 17l-1.85-4.9-4.9-1.85 4.9-1.85z" />
-              <path d="M18.6 15.4l.75 1.95 1.95.75-1.95.75-.75 1.95-.75-1.95-1.95-.75 1.95-.75z" />
+            <svg viewBox="0 0 16 16" width="20" height="20" fill="none" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M8 6.77c0.679 0 1.23 0.551 1.23 1.23s-0.551 1.23-1.23 1.23S6.77 8.679 6.77 8 7.321 6.77 8 6.77z"
+              />
+              <path
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M10.731 10.731C7.526 13.936 3.706 15.31 2.198 13.802 0.69 12.294 2.065 8.474 5.27 5.269 8.475 2.064 12.294 0.69 13.802 2.198 15.31 3.706 13.936 7.526 10.731 10.731z"
+              />
+              <path
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M10.731 5.269C13.936 8.474 15.31 12.294 13.802 13.802 12.294 15.31 8.475 13.936 5.27 10.731 2.065 7.526 0.69 3.706 2.198 2.198 3.706 0.69 7.526 2.064 10.731 5.269z"
+              />
             </svg>
           </button>
 
           <button id="smartSearch" class="tool-btn" type="button" aria-pressed="false"
                   title="智能搜索" aria-label="智能搜索">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
-                 stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="12" cy="12" r="8.5" />
-              <path d="M3.5 12h17" />
-              <path d="M12 3.5c2.2 2.3 3.4 5.3 3.4 8.5s-1.2 6.2-3.4 8.5c-2.2-2.3-3.4-5.3-3.4-8.5S9.8 5.8 12 3.5z" />
+            <svg viewBox="0 0 16 16" width="20" height="20" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.84" stroke="currentColor" stroke-width="1.4" />
+              <path d="M1.64 8h12.72" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+              <path
+                d="M8 14.849c1.598 0 2.894-3.066 2.894-6.849S9.598 1.151 8 1.151"
+                stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+              />
+              <path
+                d="M8 14.849c-1.599 0-2.895-3.066-2.895-6.849S6.401 1.151 8 1.151"
+                stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
+              />
             </svg>
           </button>
 
           <div class="spacer"></div>
 
           <button id="send" class="send-btn" type="button" disabled title="发送" aria-label="发送">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
-                 stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M12 19V5" />
-              <path d="M5 12l7-7 7 7" />
+            <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M9.551 0.39c0.301-0.046 0.597-0.035 0.898 0 0.511 0.1 0.958 0.306 1.366 0.619 0.323 0.247 0.672 0.582 1.03 0.923l6.796 6.472-2.033 1.936-6.171-5.877v15.177h-2.875V4.463L2.391 10.341 0.359 8.405 7.154 1.932C7.513 1.591 7.862 1.256 8.185 1.009 8.529 0.745 8.971 0.477 9.551 0.39z"
+              />
             </svg>
           </button>
         </div>
@@ -101,18 +125,14 @@
       <div class="msg-user">
         <div class="bubble"></div>
       </div>
-      <div class="msg-actions right">
-        <button class="copy-btn" type="button" title="复制" aria-label="复制"></button>
-      </div>
+      <div class="msg-actions right"></div>
     </template>
 
     <template id="tplAi">
       <div class="msg-ai">
         <div class="body"></div>
       </div>
-      <div class="msg-actions">
-        <button class="copy-btn" type="button" title="复制" aria-label="复制"></button>
-      </div>
+      <div class="msg-actions"></div>
     </template>
 
     <script type="module" src="./main.ts"></script>

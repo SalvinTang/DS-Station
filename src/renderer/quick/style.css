@@ -1,50 +1,66 @@
 /*
- * 快捷窗口。
- * 尺寸与配色取自设计稿：
- *   空态 400×(100~200)、有内容态 420×716 起
- *   用户气泡 #133463、右对齐、最大宽度为显示区 75%
- *   顶栏 420×50、底色 #333333、鼠标移入才出现
+ * 快捷窗口。数值全部取自 Design/设计稿001 + Design/ui尺寸.html：
+ *   空态外框 400×100，圆角 20，底色 #2C2C2E，1px 描边 #797979
+ *   有内容态外框 420 宽，圆角 30，底色 #151517，同款描边
+ *   输入框 400×100，圆角 20，底色 #2C2C2E，同款描边
+ *   输入文字 16px / 行高 22px，左 14 上 16
+ *   顶栏 高 40，圆角 29（与外框内缘对齐），底色 #232328，移出 1 秒消失
+ *   用户气泡 #133463，圆角 10，最大宽度 75%
  */
 
 :root {
   color-scheme: light dark;
 
-  --bg: #ffffff;
-  --fg: #1b1b1f;
-  --placeholder: #9aa0ab;
-  --muted: #8b8d98;
-  --hairline: rgba(0, 0, 0, 0.08);
+  /* 浅色样式 */
+  --frame-empty: #ffffff;
+  --frame-content: #ffffff;
+  --frame-border: #c9c9cf;
+  --composer-bg: #f3f3f5;
+  --composer-border: #c9c9cf;
 
-  --icon: #8b8d98;
-  --icon-hover-bg: rgba(125, 130, 155, 0.14);
-  --icon-active: #4d6bfe;
-  --icon-active-bg: rgba(77, 107, 254, 0.12);
+  --text: #1b1b1f;
+  --placeholder: #717582;
+  --icon: #0f1114;
+  --icon-active: #5686fe;
 
-  --send-bg: #4d6bfe;
-  --send-disabled-bg: rgba(77, 107, 254, 0.35);
+  --send-bg: #5686fe;
+  --send-hover: #3d69fe;
+  --send-disabled: #b0c1ff;
+  --send-fg: #ffffff;
+  --send-disabled-fg: #717582;
 
   --user-bubble: #133463;
   --user-bubble-fg: #ffffff;
 
-  --topbar-bg: #333333;
-  --topbar-fg: rgba(255, 255, 255, 0.82);
-  --topbar-hover: rgba(255, 255, 255, 0.14);
+  --topbar-bg: #e9e9eb;
+  --topbar-fg: #555555;
 
-  --scrollbar: rgba(125, 130, 155, 0.4);
+  --copy-fg: #555555;
+  --hover-bg: rgba(0, 0, 0, 0.06);
+  --scrollbar: rgba(0, 0, 0, 0.28);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #2c2c2e;
-    --fg: #eceef4;
-    --placeholder: #8b8d98;
-    --muted: #8b8d98;
-    --hairline: rgba(255, 255, 255, 0.1);
+    --frame-empty: #2c2c2e;
+    --frame-content: #151517;
+    --frame-border: #797979;
+    --composer-bg: #2c2c2e;
+    --composer-border: #797979;
 
-    --icon: #9a9ca6;
-    --icon-hover-bg: rgba(255, 255, 255, 0.1);
-    --icon-active: #8098ff;
-    --icon-active-bg: rgba(128, 152, 255, 0.18);
+    --text: #ffffff;
+    --placeholder: #717582;
+    --icon: #ffffff;
+    --icon-active: #5686fe;
+
+    --send-disabled: #3c5082;
+
+    --topbar-bg: #232328;
+    --topbar-fg: #ababab;
+
+    --copy-fg: #ffffff;
+    --hover-bg: rgba(255, 255, 255, 0.08);
+    --scrollbar: rgba(255, 255, 255, 0.28);
   }
 }
 
@@ -58,12 +74,13 @@ html,
 body {
   height: 100%;
   overflow: hidden;
+  /* 窗口本身是透明的，圆角由 .app 自己画出来 */
+  background: transparent;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
-  background: var(--bg);
-  color: var(--fg);
+  font-family: -apple-system, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -74,7 +91,7 @@ body {
  * 一旦整块应用都是拖拽区，表现就是：消息区滚不动、悬停不出现复制按钮、
  * 顶栏也永远等不到 mouseenter。
  *
- * 所以只在真正「空»的地方开拖拽：顶栏（出现时）和输入区的留白。
+ * 所以只在真正「空」的地方开拖拽：顶栏（出现时）和输入区的留白。
  */
 .app {
   position: relative;
@@ -82,6 +99,17 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border: 1px solid var(--frame-border);
+}
+
+.app[data-mode='empty'] {
+  background: var(--frame-empty);
+  border-radius: 20px;
+}
+
+.app[data-mode='content'] {
+  background: var(--frame-content);
+  border-radius: 30px;
 }
 
 /* ── 顶部功能栏 ─────────────────────────────────────────── */
@@ -89,6 +117,7 @@ body {
 /*
  * 顶栏是**盖在消息区上**的一层，不参与 flex 布局。
  * 所以它收起后，下面的文字会自然顶上去，不会留下空洞。
+ * 它位于 .app 的边框内缘：420 的窗口 → 宽 418、圆角 29，视觉上和外框同心。
  */
 .topbar {
   position: absolute;
@@ -97,20 +126,22 @@ body {
   right: 0;
   z-index: 10;
 
-  height: 50px;
+  height: 40px;
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 0 10px;
+  gap: 8px;
+  /* 设计稿里的图标整体比几何中心低 1px */
+  padding: 2px 14px 0 7px;
 
   background: var(--topbar-bg);
   color: var(--topbar-fg);
+  border-radius: 29px 29px 0 0;
 
   /* 隐藏时**不是**拖拽区 —— 否则鼠标从顶部进入时事件被吞，
      mouseenter 永远不触发，顶栏就再也出不来了 */
   -webkit-app-region: no-drag;
 
-  /* 鼠标移入才出现（设计稿）。2 秒后自动隐藏由 main.ts 控制 */
+  /* 鼠标移入才出现（设计稿）。1 秒后自动隐藏由 main.ts 控制 */
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.18s ease;
@@ -147,7 +178,7 @@ body {
 }
 
 .tb-btn:hover {
-  background: var(--topbar-hover);
+  background: var(--hover-bg);
 }
 
 /* ── 对话区 ─────────────────────────────────────────────── */
@@ -159,8 +190,8 @@ body {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  /* 距窗口边缘 10px */
-  padding-top: 10px;
+  /* 外框 1px 描边之内再留 9px，视觉上距窗口边缘 10px */
+  padding: 9px 9px 0;
 }
 
 .app[data-mode='empty'] .messages {
@@ -170,12 +201,17 @@ body {
 .messages-inner {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   /*
-   * 上方的 50px = 顶栏高度。因为顶栏是浮层，滚到最顶时它会盖住
-   * 消息区最上面那一条；留出这段距离，第一条消息才不会被压住。
+   * 顶栏高 40，再留 25px —— 设计稿里第一条内容距外框顶 65px。
+   * 顶栏收起时内容仍然从 65px 开始，不会上下跳。
    */
-  padding: 50px 16px 10px;
+  padding-top: 55px;
+  padding-bottom: 10px;
+}
+
+.msg-group {
+  display: flex;
+  flex-direction: column;
 }
 
 .msg-user {
@@ -186,62 +222,58 @@ body {
 .msg-user .bubble {
   background: var(--user-bubble);
   color: var(--user-bubble-fg);
-  padding: 9px 13px;
-  border-radius: 14px 14px 4px 14px;
+  padding: 7px 10px;
+  border-radius: 10px;
   /* 设计稿：最大宽度为显示区域的 75%，超出折行 */
   max-width: 75%;
-  font-size: 13.5px;
-  line-height: 1.6;
+  font-size: 16px;
+  line-height: 22px;
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
 }
 
 .msg-ai .body {
-  font-size: 13.5px;
-  line-height: 1.72;
+  font-size: 16px;
+  line-height: 22px;
+  color: var(--text);
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
 }
 
+/* 设计稿：内容下方 10px 是复制按钮，按钮下方再留 30px 到下一组 */
 .msg-actions {
   display: flex;
-  margin-top: 5px;
-  margin-bottom: 12px;
-  opacity: 0;
-  transition: opacity 0.16s ease;
+  margin-top: 10px;
+  margin-bottom: 30px;
 }
 
 .msg-actions.right {
   justify-content: flex-end;
+  /* 图标 16 + 按钮 20，右移 2px 对齐到 10px 边距 */
+  margin-right: -2px;
 }
 
-/* 复制按钮：鼠标移到这一条上才露出来 */
-.msg-group:hover .msg-actions {
-  opacity: 1;
+.msg-actions:not(.right) {
+  margin-left: -2px;
 }
 
 .copy-btn {
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
-  color: var(--muted);
+  color: var(--copy-fg);
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background 0.14s ease;
 }
 
 .copy-btn:hover {
-  background: var(--icon-hover-bg);
-  color: var(--fg);
-}
-
-.copy-btn.done {
-  color: #30d158;
+  background: var(--hover-bg);
 }
 
 /* 等待回答时的呼吸点 */
@@ -249,14 +281,14 @@ body {
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
 .thinking i {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--muted);
+  background: var(--placeholder);
   animation: ds-breathe 1.15s ease-in-out infinite;
 }
 
@@ -282,32 +314,49 @@ body {
 
 /* ── 输入区 ─────────────────────────────────────────────── */
 
+/*
+ * 内边距按设计稿反推：外框 1px 描边 + 这些值 = 上 16 / 左 14 / 右 11 / 下 10。
+ * 输入框内文字 28 高、工具栏 36 高。
+ */
 .composer {
-  flex: none;
   display: flex;
   flex-direction: column;
-  /* 设计稿：输入框距上边 10 */
-  padding: 10px;
-  gap: 16px;
+  padding: 15px 10px 9px 13px;
   -webkit-app-region: drag;
+}
+
+/* 空态：整个窗口就是输入框，描边和圆角由 .app 负责 */
+.app[data-mode='empty'] .composer {
+  flex: 1;
+  background: transparent;
+}
+
+/* 有内容态：输入框是浮在外框里的圆角块，四周各留 10px */
+.app[data-mode='content'] .composer {
+  flex: none;
+  min-height: 100px;
+  margin: 0 9px 9px;
+  border: 1px solid var(--composer-border);
+  border-radius: 20px;
+  background: var(--composer-bg);
 }
 
 .input {
   -webkit-app-region: no-drag;
   flex: none;
   width: 100%;
-  /* 一行 = 20 行高 + 上下各 4 内边距 = 28，与设计稿一致 */
+  /* 一行 = 22 行高 + 上下各 3 内边距 = 28，与设计稿一致 */
   min-height: 28px;
-  padding: 4px 0;
+  padding: 3px 0;
 
   border: 0;
   outline: none;
   background: transparent;
-  color: var(--fg);
+  color: var(--text);
 
   font: inherit;
-  font-size: 12px;
-  line-height: 20px;
+  font-size: 16px;
+  line-height: 22px;
 
   resize: none;
   overflow-y: hidden;
@@ -322,10 +371,12 @@ body {
   -webkit-app-region: no-drag;
   flex: none;
   height: 36px;
+  margin-top: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-left: 6px;
+  gap: 12px;
+  /* 第一个按钮距内容起点 0，图标再居中内缩 4 → 视觉上距左边 18 */
+  padding-left: 0;
 }
 
 .toolbar .spacer {
@@ -346,13 +397,12 @@ body {
 }
 
 .tool-btn:hover {
-  background: var(--icon-hover-bg);
+  background: var(--hover-bg);
 }
 
 /* 设计稿：浅色是关闭状态，蓝色是开启状态 */
 .tool-btn[aria-pressed='true'] {
   color: var(--icon-active);
-  background: var(--icon-active-bg);
 }
 
 .send-btn {
@@ -363,30 +413,27 @@ body {
   border: 0;
   border-radius: 50%;
   background: var(--send-bg);
-  color: #fff;
+  color: var(--send-fg);
   cursor: pointer;
-  transition: background 0.14s ease, filter 0.14s ease;
+  transition: background 0.14s ease;
 }
 
 /* 设计稿：无内容时不可点击，且没有悬浮状态 */
 .send-btn:disabled {
-  background: var(--send-disabled-bg);
+  background: var(--send-disabled);
+  color: var(--send-disabled-fg);
   cursor: default;
 }
 
 .send-btn:not(:disabled):hover {
-  filter: brightness(1.08);
-}
-
-.send-btn:not(:disabled):active {
-  filter: brightness(0.94);
+  background: var(--send-hover);
 }
 
 .tool-btn:focus-visible,
 .send-btn:focus-visible,
 .tb-btn:focus-visible,
 .copy-btn:focus-visible {
-  outline: 2px solid #4d6bfe;
+  outline: 2px solid var(--send-bg);
   outline-offset: 1px;
 }
 

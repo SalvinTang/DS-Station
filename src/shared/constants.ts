@@ -36,9 +36,9 @@ export const QUICK_WINDOW_CORNER_RADIUS = 17
 export const QUICK_WINDOW_CONTENT_WIDTH = 420
 export const QUICK_WINDOW_CONTENT_MIN_HEIGHT = 500
 
-/** 设计稿：顶部功能栏 420×50，鼠标移入才出现，移出 2 秒后隐藏 */
-export const QUICK_TOPBAR_HEIGHT = 50
-export const QUICK_TOPBAR_HIDE_DELAY = 2000
+/** 设计稿（ui尺寸.html）：顶部功能栏高 40，鼠标移入才出现，移出 1 秒后隐藏 */
+export const QUICK_TOPBAR_HEIGHT = 40
+export const QUICK_TOPBAR_HIDE_DELAY = 1000
 
 /**
  * 默认呼出快捷键。

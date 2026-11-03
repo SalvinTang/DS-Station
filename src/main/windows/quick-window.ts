@@ -1,4 +1,4 @@
-import { BrowserWindow, app, nativeTheme, screen } from 'electron'
+import { BrowserWindow, app, screen } from 'electron'
 import { join } from 'node:path'
 import {
   QUICK_WINDOW_CONTENT_MIN_HEIGHT,
@@ -17,8 +17,6 @@ import type { QuickEvent, QuickMode } from '../../shared/types'
  * 这是一个**纯自绘界面**，不是嵌进去的第二个 DeepSeek 网页（决策 D1）——
  * 它自己不跟 DeepSeek 说话，一切由主进程驱动主窗口那个网页完成。
  */
-
-const THEMED_BG = { light: '#ffffff', dark: '#2c2c2e' } as const
 
 /** 空态距屏幕顶部的位置（设计稿要求「居中或接近屏幕顶部」）*/
 const TOP_RATIO = 0.18
@@ -52,14 +50,20 @@ export class QuickWindow {
       height: QUICK_WINDOW_MIN_HEIGHT,
       show: false,
       frame: false,
+      /*
+       * 透明窗口：设计稿的圆角是空态 20、有内容态 30，
+       * macOS 原生无边框窗口只有约 10px，只能用 CSS 圆角自己画。
+       * 背景色留空，圆角外的部分才真的透明。
+       */
+      transparent: true,
+      backgroundColor: '#00000000',
+      roundedCorners: false,
+      hasShadow: true,
       resizable: false,
       minimizable: false,
       maximizable: false,
       fullscreenable: false,
       skipTaskbar: true,
-      roundedCorners: true,
-      hasShadow: true,
-      backgroundColor: this.bg(),
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -95,9 +99,6 @@ export class QuickWindow {
       this.bottomY = bounds.y + bounds.height
     })
 
-    nativeTheme.on('updated', () => {
-      this.window.setBackgroundColor(this.bg())
-    })
   }
 
   get isVisible(): boolean {
@@ -246,7 +247,4 @@ export class QuickWindow {
     })
   }
 
-  private bg(): string {
-    return nativeTheme.shouldUseDarkColors ? THEMED_BG.dark : THEMED_BG.light
-  }
 }

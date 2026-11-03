@@ -59,7 +59,7 @@ const zh = {
   'menu.front': '前置全部窗口',
 
   // ── 快捷窗口 ──
-  'quick.placeholder': '给DeepSeek发送消息',
+  'quick.placeholder': '给Deepseek发送消息',
   'quick.deepThink': '深度思考',
   'quick.smartSearch': '智能搜索',
   'quick.send': '发送',
