@@ -27,6 +27,12 @@ const api: DsApi = {
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),
 
+  beginWindowDrag: (screenX, screenY) =>
+    ipcRenderer.send('ds:window-drag-start', screenX, screenY),
+  moveWindowDrag: (screenX, screenY) =>
+    ipcRenderer.send('ds:window-drag-move', screenX, screenY),
+  endWindowDrag: () => ipcRenderer.send('ds:window-drag-end'),
+
   onQuickShown: (callback: () => void) => {
     ipcRenderer.on('ds:quick-shown', () => callback())
   },

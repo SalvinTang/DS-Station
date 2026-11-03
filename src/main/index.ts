@@ -146,6 +146,20 @@ function registerIpcHandlers(): void {
 
   ipcMain.on('ds:quick-hide', () => quickWindow?.hide())
 
+  ipcMain.on('ds:window-drag-start', (_event, screenX: unknown, screenY: unknown) => {
+    if (typeof screenX === 'number' && typeof screenY === 'number') {
+      quickWindow?.beginDrag(screenX, screenY)
+    }
+  })
+
+  ipcMain.on('ds:window-drag-move', (_event, screenX: unknown, screenY: unknown) => {
+    if (typeof screenX === 'number' && typeof screenY === 'number') {
+      quickWindow?.moveDrag(screenX, screenY)
+    }
+  })
+
+  ipcMain.on('ds:window-drag-end', () => quickWindow?.endDrag())
+
   ipcMain.on('ds:quick-resize', (_event, height: unknown) => {
     if (typeof height === 'number' && Number.isFinite(height)) {
       quickWindow?.applyHeight(height)

@@ -23,8 +23,15 @@ export interface QuickWindowSettings {
    * 0 表示「从不」—— 永远保留上一次的对话内容。
    */
   resetAfterMinutes: number
-  width: number
-  height: number
+  /**
+   * 上次隐藏时窗口的左边和底边（屏幕坐标）。
+   * 空态会向上长高，用底边做锚点最稳；null 表示还没定位过，用屏幕正中。
+   */
+  x: number | null
+  bottom: number | null
+  /** 有内容态的尺寸，跨重启保留 */
+  contentWidth: number
+  contentHeight: number
 }
 
 export interface Settings {
@@ -37,7 +44,14 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   window: { width: 1280, height: 860 },
-  quickWindow: { hotkey: 'Alt+Space', resetAfterMinutes: 10, width: 400, height: 100 },
+  quickWindow: {
+    hotkey: 'Alt+Space',
+    resetAfterMinutes: 10,
+    x: null,
+    bottom: null,
+    contentWidth: 420,
+    contentHeight: 500,
+  },
   language: 'system',
 }
 

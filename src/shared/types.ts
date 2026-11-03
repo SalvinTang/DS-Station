@@ -13,6 +13,8 @@ export type QuickEvent =
   | { type: 'answer-done' }
   /** 主进程改了窗口形态，界面要跟着切（避免两边状态不一致） */
   | { type: 'mode-changed'; mode: QuickMode }
+  /** 空态 → 有内容态的窗口展开动画结束，界面可以把内容淡入 */
+  | { type: 'transition-done' }
   /** 对话被清空（顶栏「新对话」） */
   | { type: 'conversation-cleared' }
   /** 出错，界面应把消息撤掉并提示 */
@@ -87,6 +89,15 @@ export interface DsApi {
 
   /** 顶栏「扩大」：切到主窗口，关闭快捷窗口 */
   quickExpand: () => void
+
+  // ── 窗口拖动（透明窗口下原生拖拽区不可靠，改为手动移动）──
+
+  /** 按下鼠标，记录起点（屏幕坐标） */
+  beginWindowDrag: (screenX: number, screenY: number) => void
+  /** 拖动中，更新到当前鼠标位置（屏幕坐标） */
+  moveWindowDrag: (screenX: number, screenY: number) => void
+  /** 松开鼠标，落位并记住位置 */
+  endWindowDrag: () => void
 
   /** 面板被呼出时触发，界面据此重新量高度、拉文案、把焦点收回输入框 */
   onQuickShown: (callback: () => void) => void

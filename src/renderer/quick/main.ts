@@ -83,6 +83,8 @@ const tbNewChat = document.getElementById('tbNewChat')
 const tbExpand = document.getElementById('tbExpand')
 
 let mode: QuickMode = 'empty'
+/** 拖动窗口：按下时的鼠标屏幕坐标 */
+let dragOrigin: { x: number; y: number } | null = null
 /** 正在等回答：这期间禁止再次发送 */
 let busy = false
 /** 当前正在流式更新的那条回答 */
@@ -223,6 +225,7 @@ function applyMode(next: QuickMode): void {
     busy = false
     clearMessages()
     topbar.classList.remove('show')
+    app.classList.remove('content-enter')
     input.value = ''
   }
 
@@ -250,6 +253,18 @@ function submit(): void {
     text,
     deepThink: isPressed(deepThinkButton),
     smartSearch: isPressed(smartSearchButton),
+  }
+
+  /*
+   * 空态 → 有内容态：主进程会把窗口下移再向上长高。
+   * 这期间先把内容藏起来，等主进程发来 transition-done 再淡入 ——
+   * 效果就是「外框先撑开，内容再出现」。
+   */
+  const enteringContent = mode === 'empty'
+  if (enteringContent) {
+    app.classList.add('content-enter')
+    // 兜底：万一没收到 transition-done，也不要把内容永久藏着
+    window.setTimeout(() => app.classList.remove('content-enter'), 1500)
   }
 
   // 先把反馈给到用户：切形态 + 画出自己那条气泡，然后再等回答
@@ -292,6 +307,12 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
 
     case 'mode-changed': {
       applyMode(event.mode)
+      break
+    }
+
+    case 'transition-done': {
+      // 展开动画结束，内容淡入
+      app.classList.remove('content-enter')
       break
     }
 
@@ -368,11 +389,45 @@ tbClose?.addEventListener('click', () => window.ds?.hideQuickWindow())
 tbNewChat?.addEventListener('click', () => window.ds?.quickNewChat())
 tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
 
+// ── 拖动窗口 ──────────────────────────────────────────────────
+/*
+ * 窗口是透明的，-webkit-app-region: drag 在这种窗口上不可靠，
+ * 所以改成手动拖动：按住面板上**没有被控件遮挡**的地方就能移动整个窗口。
+ * 消息区排除在外（要能选中文字、滚动），按钮和输入框同理。
+ */
+app.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, textarea, input, select, a, .messages')) return
+
+  dragOrigin = { x: event.screenX, y: event.screenY }
+  app.setPointerCapture(event.pointerId)
+  window.ds?.beginWindowDrag(event.screenX, event.screenY)
+  showTopbar()
+  event.preventDefault()
+})
+
+app.addEventListener('pointermove', (event) => {
+  if (!dragOrigin) return
+  window.ds?.moveWindowDrag(event.screenX, event.screenY)
+})
+
+function endWindowDrag(event: PointerEvent): void {
+  if (!dragOrigin) return
+  dragOrigin = null
+  if (app.hasPointerCapture(event.pointerId)) app.releasePointerCapture(event.pointerId)
+  window.ds?.endWindowDrag()
+}
+
+app.addEventListener('pointerup', endWindowDrag)
+app.addEventListener('pointercancel', endWindowDrag)
+
 // 被重新唤出时：焦点回到输入框，并按输入框里**当前**的内容重新量一次高度 ——
 // 用户收起面板时可能已经打了一大段字，不能缩回初始尺寸。
 window.ds?.onQuickShown(() => {
   // 顺手重拉一次文案 —— 用户可能刚在设置里换了语言
   void loadMessages()
+  app.classList.remove('content-enter')
   autosize()
   input.focus()
 })

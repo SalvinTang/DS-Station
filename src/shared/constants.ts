@@ -34,7 +34,11 @@ export const QUICK_WINDOW_CORNER_RADIUS = 17
 
 /** 有内容态：默认 420×500，可拖拽放大（设计稿是 716，按实际使用调小了） */
 export const QUICK_WINDOW_CONTENT_WIDTH = 420
-export const QUICK_WINDOW_CONTENT_MIN_HEIGHT = 500
+export const QUICK_WINDOW_CONTENT_DEFAULT_HEIGHT = 500
+
+/** 最小尺寸：宽 = 默认宽的 100%，高 = 默认高的 60% */
+export const QUICK_WINDOW_CONTENT_MIN_WIDTH = QUICK_WINDOW_CONTENT_WIDTH
+export const QUICK_WINDOW_CONTENT_MIN_HEIGHT = Math.round(QUICK_WINDOW_CONTENT_DEFAULT_HEIGHT * 0.6)
 
 /** 设计稿（ui尺寸.html）：顶部功能栏高 40，鼠标移入才出现，移出 1 秒后隐藏 */
 export const QUICK_TOPBAR_HEIGHT = 40
