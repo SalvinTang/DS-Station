@@ -78,9 +78,6 @@ export class QuickWindow {
   /** 缩放落盘防抖 */
   private sizeSaveTimer: NodeJS.Timeout | null = null
 
-  /** 多桌面：show() 之后把窗口从「所有空间」收回当前空间 */
-  private workspaceTimer: NodeJS.Timeout | null = null
-
   /** 上次收起面板的时刻，用来实现设计稿的「重置为新聊天」 */
   private lastHiddenAt = 0
 
@@ -122,9 +119,18 @@ export class QuickWindow {
       },
     })
 
-    // 盖在全屏应用之上、跟随所有工作区
-    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-    this.window.setAlwaysOnTop(true, 'floating')
+    /*
+     * 盖在全屏应用之上、跟随所有工作区。
+     *
+     * - 层级用 screen-saver：floating 仍然会被全屏应用盖住
+     * - skipTransformProcessType：进程激活策略已经在 index.ts 里设成
+     *   accessory 了，再让它转换一次反而会把窗口和 Dock 闪没
+     */
+    this.window.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true,
+    })
+    this.window.setAlwaysOnTop(true, 'screen-saver')
 
     void this.window.loadFile(join(__dirname, '../renderer/quick/index.html'))
 
@@ -176,27 +182,50 @@ export class QuickWindow {
     this.placeAtSavedPosition()
 
     /*
-     * 多桌面（Spaces）：
-     * 窗口如果一直挂在上次所在的桌面，show() 会把用户拽回那个桌面。
-     * 先退出「所有空间」再重新加入，让这次显示落在用户当前所在的桌面上；
-     * 显示后再退出「所有空间」，把窗口固定在这一张桌面里
-     * —— 否则切桌面时面板会跟着跑。
+     * 多桌面 / 全屏：
+     * 窗口始终「在所有空间可见」，并且允许盖在全屏应用之上。
+     * 这样：① 任意桌面按快捷键，第一次就在当前桌面出现；
+     *      ② 用户切桌面时已经打开的面板会跟着走，不会留在原桌面；
+     *      ③ 全屏应用里唤出也能浮在它前面。
+     * ★ 不要在这里把窗口收回某一空间 —— 那会让上面三种情况全部退化
+     *   （第一次按不出来、要按两次；全屏应用里被挡在后面）。
      */
-    this.window.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true })
-    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+    this.window.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+      skipTransformProcessType: true,
+    })
 
+    /*
+     * ★ 不要调用 app.show()。
+     *   它会把整个 App 恢复到上次所在的桌面 —— 在全屏应用里唤出时，
+     *   用户会先被切到那个桌面，再看到面板。window.show() 自己会激活。
+     *   前提是 index.ts 里把激活策略设成了 accessory（见那里的注释）。
+     */
+
+    // 先把层级定好再显示，窗口一出现就在全屏应用之上
+    this.window.setAlwaysOnTop(true, 'screen-saver')
     this.window.show()
-    // macOS 在 hide/show 之后可能重置置顶级别，补一次
-    this.window.setAlwaysOnTop(true, 'floating')
-    this.window.focus()
+    this.window.moveTop()
     this.visible = true
 
-    if (this.workspaceTimer) clearTimeout(this.workspaceTimer)
-    this.workspaceTimer = setTimeout(() => {
-      this.workspaceTimer = null
-      if (this.window.isDestroyed() || !this.visible) return
-      this.window.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true })
-    }, 120)
+    // 全屏自检：确认面板拿到了键盘焦点（DS_FS_TEST=1）
+    if (process.env.DS_FS_TEST === '1') {
+      setTimeout(() => {
+        void this.window.webContents
+          .executeJavaScript('document.hasFocus()')
+          .then((hasFocus) =>
+            console.log(
+              '[快捷窗口] 激活后:',
+              JSON.stringify({
+                focused: this.window.isFocused(),
+                visible: this.window.isVisible(),
+                rendererHasFocus: hasFocus,
+                alwaysOnTop: this.window.isAlwaysOnTop(),
+              }),
+            ),
+          )
+      }, 300)
+    }
 
     const { x, y, width, height } = this.window.getBounds()
     console.log(`[快捷窗口] 显示于 (${x}, ${y})，尺寸 ${width}×${height}（${this.mode}）`)
@@ -208,11 +237,6 @@ export class QuickWindow {
 
   hide(): void {
     if (!this.visible) return
-
-    if (this.workspaceTimer) {
-      clearTimeout(this.workspaceTimer)
-      this.workspaceTimer = null
-    }
 
     // 如果动画还没播完就被收起，直接跳到终态，
     // 否则会把中间尺寸当成「用户调过的大小」记下来

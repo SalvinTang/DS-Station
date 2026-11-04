@@ -29,6 +29,22 @@ import {
 // 必须在 ready 之前设置：它决定 userData 落在哪个目录
 app.setName('DS Desktop')
 
+/*
+ * ★ 主窗口不可见时，DeepSeek 网页仍然要正常跑。
+ *
+ * 快捷窗口的数据源是主窗口里那个网页（决策 D1）。Chromium 会把「不可见 /
+ * 被遮挡的窗口」判定为后台，压缩定时器和渲染，导致回答迟迟不写进 DOM ——
+ * 表现就是面板一直 loading，打开一下主窗口才恢复。
+ *
+ * backgroundThrottling: false 只解决了一部分；窗口从未显示过（已登录启动）
+ * 时，还需要关掉 Chromium 的渲染进程后台化与遮挡计算。
+ * 下面这些开关必须在 app ready 之前设置。
+ */
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
 // 测试辅助：把数据目录指到别处。正式运行不会设置这个变量，
 // userData 落在 ~/Library/Application Support/DS Desktop/
 if (process.env.DS_USER_DATA) {
@@ -64,6 +80,15 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => unregisterAllHotkeys())
 
   app.whenReady().then(() => {
+    /*
+     * 菜单栏应用：不要 Dock 图标，也不参与 Cmd+Tab。
+     *
+     * 这是快捷窗口能「浮在全屏应用前面」的前提：accessory 进程被激活时
+     * 不会把用户切到别的桌面。quick-window.ts 里的 setVisibleOnAllWorkspaces
+     * 因此都带 skipTransformProcessType —— 进程类型已经在这里定好了。
+     */
+    if (process.platform === 'darwin') app.setActivationPolicy('accessory')
+
     // 开发/预览时 Dock 还显示 Electron 的默认图标，这里换成自己的。
     // 打包后由 build/icon.icns 提供，不需要这一步。
     if (!app.isPackaged) {
@@ -116,6 +141,24 @@ if (!app.requestSingleInstanceLock()) {
     // 焦点自检：发送后、回答结束后、窗口重新获得焦点时，光标是否都在输入框
     if (process.env.DS_FOCUS_TEST === '1') {
       runFocusSelfCheck(quickWindow)
+    }
+
+    // 多桌面自检：App 隐藏状态下再次唤出，窗口是否真的能出来
+    if (process.env.DS_SPACE_TEST === '1') {
+      runSpaceSelfCheck(mainWindow, quickWindow)
+    }
+
+    // 全屏序列自检：面板显示 → 收起（app.hide）→ 在全屏应用上重新唤出
+    if (process.env.DS_FS_SEQUENCE === '1') {
+      setTimeout(() => {
+        void (async () => {
+          console.log('[全屏测试] 收起面板')
+          quickWindow?.hide()
+          await delay(1200)
+          console.log('[全屏测试] 重新唤出')
+          quickWindow?.show()
+        })()
+      }, 9000)
     }
 
     // 菜单栏图标自检：tray 有没有建起来、菜单位置和文案对不对
@@ -519,6 +562,44 @@ function runSettingsSelfCheck(): void {
       rebuildMenu()
     })()
   }, 4000)
+}
+
+/**
+ * 多桌面自检：模拟「主窗口隐藏 → 面板收起（会 app.hide）→ 再唤出」。
+ *
+ * Space 本身没法自动化，这里至少确认 App 能从隐藏状态恢复、窗口真的可见，
+ * 以及位置没有被意外改动。
+ */
+function runSpaceSelfCheck(win: MainWindow | null, quick: QuickWindow | null): void {
+  if (!win || !quick) return
+
+  const state = (): unknown => ({
+    appHidden: app.isHidden(),
+    dockVisible: app.dock?.isVisible() ?? null,
+    windowVisible: quick.isVisible,
+    bounds: quick.window.getBounds(),
+  })
+
+  setTimeout(() => {
+    void (async () => {
+      console.log('[桌面测试] 初始:', JSON.stringify(state()))
+      // 主窗口不可见，收起面板时才会走 app.hide() 这条路
+      win.window.hide()
+      await delay(600)
+
+      quick.show()
+      await delay(800)
+      console.log('[桌面测试] 首次唤出:', JSON.stringify(state()))
+
+      quick.hide()
+      await delay(600)
+      console.log('[桌面测试] 收起后:', JSON.stringify(state()))
+
+      quick.show()
+      await delay(800)
+      console.log('[桌面测试] 再次唤出:', JSON.stringify(state()))
+    })()
+  }, 6000)
 }
 
 /**
