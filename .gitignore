@@ -20,6 +20,11 @@ release/
 # —————— 一些文档 ————————————
 /开发状态与遗留问题.md
 /Design/
+# 内部产品计划 / 需求文档：开发过程资料，不对外发布（本地保留）
+/DS Desktop Protect Plan.md
+/V0.0.1 需求清单与技术方案.md
+# 内部 HTML 产品原型：不是真实代码，且含本机绝对路径
+/HTMLdemo/
 
 # ── 缓存 ──────────────────────────────────────────────────────────
 # Electron 二进制缓存（下载慢时的备选位置）
@@ -40,6 +45,9 @@ dom-report.json
 .env.*
 !.env.example
 *.p12
+*.pem
+*.key
+*.p8
 *.cer
 *.certSigningRequest
 *.mobileprovision
