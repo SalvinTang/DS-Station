@@ -119,6 +119,17 @@ function syncSendState(): void {
   sendButton.disabled = busy || input.value.trim().length === 0
 }
 
+/**
+ * 把光标放回输入框。
+ *
+ * 只在窗口本身是前台时生效 —— 面板在后台（比如回答流着的时候用户切走了）
+ * 不应该把焦点抢回来。
+ */
+function focusInput(): void {
+  if (!document.hasFocus()) return
+  input.focus({ preventScroll: true })
+}
+
 function isPressed(element: Element | null): boolean {
   return element?.getAttribute('aria-pressed') === 'true'
 }
@@ -166,6 +177,9 @@ async function copyText(text: string, button: HTMLButtonElement): Promise<void> 
     button.classList.remove('done')
     button.innerHTML = COPY_ICON
   }, 2000)
+
+  // 复制完把光标还给输入框
+  focusInput()
 }
 
 function appendMessage(kind: 'user' | 'ai', text: string): HTMLElement {
@@ -280,8 +294,8 @@ function submit(): void {
   input.value = ''
   autosize()
   syncSendState()
-  // 发送后光标离开输入框：面板接下来是「看回答」的状态
-  input.blur()
+  // 发送后光标留在输入框，方便接着写下一句
+  focusInput()
 
   window.ds?.submitQuickMessage(payload)
 }
@@ -306,12 +320,15 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       streamingBody = null
       busy = false
       syncSendState()
-      // 不再自动把焦点放回输入框 —— 用户要接着问会自己点
+      // 回答结束，光标回到输入框
+      focusInput()
       break
     }
 
     case 'mode-changed': {
       applyMode(event.mode)
+      // 收回空态之后，用户多半是要马上打字
+      if (event.mode === 'empty') focusInput()
       break
     }
 
@@ -448,6 +465,25 @@ window.ds?.onQuickShown(() => {
   app.classList.remove('content-enter')
   autosize()
   input.focus()
+})
+
+// 焦点一回到窗口，光标就落在输入框里（从别的 App 切回来、重新唤出都算）
+window.addEventListener('focus', focusInput)
+
+/*
+ * 点工具栏按钮、复制按钮之后，把光标还给输入框。
+ * 消息区的点击不拦 —— 那里要能选中文字。
+ */
+app.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement | null
+  if (!target) return
+  if (target.closest('.toolbar .tool-btn, .copy-btn')) {
+    focusInput()
+    return
+  }
+  if (target.closest('.composer') && !target.closest('textarea, button')) {
+    focusInput()
+  }
 })
 
 void loadMessages()

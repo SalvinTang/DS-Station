@@ -78,6 +78,9 @@ export class QuickWindow {
   /** 缩放落盘防抖 */
   private sizeSaveTimer: NodeJS.Timeout | null = null
 
+  /** 多桌面：show() 之后把窗口从「所有空间」收回当前空间 */
+  private workspaceTimer: NodeJS.Timeout | null = null
+
   /** 上次收起面板的时刻，用来实现设计稿的「重置为新聊天」 */
   private lastHiddenAt = 0
 
@@ -171,9 +174,29 @@ export class QuickWindow {
   show(): void {
     this.applyResetRule()
     this.placeAtSavedPosition()
+
+    /*
+     * 多桌面（Spaces）：
+     * 窗口如果一直挂在上次所在的桌面，show() 会把用户拽回那个桌面。
+     * 先退出「所有空间」再重新加入，让这次显示落在用户当前所在的桌面上；
+     * 显示后再退出「所有空间」，把窗口固定在这一张桌面里
+     * —— 否则切桌面时面板会跟着跑。
+     */
+    this.window.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true })
+    this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+
     this.window.show()
+    // macOS 在 hide/show 之后可能重置置顶级别，补一次
+    this.window.setAlwaysOnTop(true, 'floating')
     this.window.focus()
     this.visible = true
+
+    if (this.workspaceTimer) clearTimeout(this.workspaceTimer)
+    this.workspaceTimer = setTimeout(() => {
+      this.workspaceTimer = null
+      if (this.window.isDestroyed() || !this.visible) return
+      this.window.setVisibleOnAllWorkspaces(false, { visibleOnFullScreen: true })
+    }, 120)
 
     const { x, y, width, height } = this.window.getBounds()
     console.log(`[快捷窗口] 显示于 (${x}, ${y})，尺寸 ${width}×${height}（${this.mode}）`)
@@ -185,6 +208,11 @@ export class QuickWindow {
 
   hide(): void {
     if (!this.visible) return
+
+    if (this.workspaceTimer) {
+      clearTimeout(this.workspaceTimer)
+      this.workspaceTimer = null
+    }
 
     // 如果动画还没播完就被收起，直接跳到终态，
     // 否则会把中间尺寸当成「用户调过的大小」记下来
@@ -356,21 +384,27 @@ export class QuickWindow {
     let y: number
 
     if (settings.x !== null && settings.bottom !== null) {
-      x = settings.x
-      y = settings.bottom - height
+      /*
+       * 存的是绝对坐标。先换算成「相对上次所在显示器工作区左上角」的偏移，
+       * 再落回当前显示器 —— 多桌面/多显示器切换时相对位置保持不变。
+       */
+      const savedDisplay = screen.getDisplayNearestPoint({
+        x: Math.round(settings.x + width / 2),
+        y: Math.round(settings.bottom - height / 2),
+      })
+      const relativeX = settings.x - savedDisplay.workArea.x
+      const relativeBottom = settings.bottom - savedDisplay.workArea.y
+
+      x = area.x + relativeX
+      y = area.y + relativeBottom - height
     } else {
       x = Math.round(area.x + (area.width - width) / 2)
       y = Math.round(area.y + (area.height - height) / 2)
     }
 
-    // 上次的位置可能在已经拔掉的副屏上，夹回最近的显示器
-    const target = screen.getDisplayNearestPoint({
-      x: Math.round(x + width / 2),
-      y: Math.round(y + height / 2),
-    })
-    const workArea = target.workArea
-    x = clamp(x, workArea.x - width + 80, workArea.x + workArea.width - 80)
-    y = clamp(y, workArea.y, workArea.y + workArea.height - 80)
+    // 窗口不能完全跑出工作区
+    x = clamp(x, area.x - width + 80, area.x + area.width - 80)
+    y = clamp(y, area.y, area.y + area.height - 80)
 
     this.bottomY = y + height
     this.window.setBounds({ x: Math.round(x), y: Math.round(y), width, height })

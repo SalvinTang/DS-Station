@@ -94,9 +94,16 @@ const startedAt = Date.now()
 
 try {
   run(process.execPath, ['node_modules/electron-vite/bin/electron-vite.js', 'build'])
-  run(process.execPath, ['node_modules/electron-builder/cli.js', '--mac', target, '--arm64'], {
-    BUILD_NUMBER: build,
-  })
+  /*
+   * --publish never：仓库配置了 GitHub remote 后，electron-builder 会因为
+   * CI 检测默认尝试上传 release，没有 GH_TOKEN 就直接失败。
+   * 我们的发包是手动上传，打包脚本只负责出本地文件。
+   */
+  run(
+    process.execPath,
+    ['node_modules/electron-builder/cli.js', '--mac', target, '--arm64', '--publish', 'never'],
+    { BUILD_NUMBER: build },
+  )
 } catch (err) {
   if (!skipBump) writeBuildNumber(previous)
   console.error(`\n[dist] ❌ 打包失败，构建号已回滚到 ${String(previous).padStart(3, '0')}`)

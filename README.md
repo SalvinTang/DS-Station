@@ -17,6 +17,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/images/DSD_Introduction.gif" alt="DS Desktop 快捷窗口演示" width="480">
+</p>
+
 ---
 
 ## 它是什么

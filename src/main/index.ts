@@ -113,6 +113,11 @@ if (!app.requestSingleInstanceLock()) {
       runStartupSelfCheck(mainWindow, quickWindow, () => startupFlow)
     }
 
+    // 焦点自检：发送后、回答结束后、窗口重新获得焦点时，光标是否都在输入框
+    if (process.env.DS_FOCUS_TEST === '1') {
+      runFocusSelfCheck(quickWindow)
+    }
+
     // 菜单栏图标自检：tray 有没有建起来、菜单位置和文案对不对
     if (process.env.DS_TRAY_TEST === '1') {
       setTimeout(() => {
@@ -514,6 +519,61 @@ function runSettingsSelfCheck(): void {
       rebuildMenu()
     })()
   }, 4000)
+}
+
+/**
+ * 焦点自检：
+ *   1. 发送后光标是否仍在输入框
+ *   2. answer-done 之后是否回到输入框
+ *   3. 窗口重新获得焦点时是否回到输入框
+ *
+ * 会把 ds:quick-submit 的监听摘掉，避免真的往 DeepSeek 发消息。
+ */
+function runFocusSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+
+  const probe = (): Promise<unknown> =>
+    quick.window.webContents.executeJavaScript(`(() => ({
+      active: document.activeElement
+        ? (document.activeElement.id || document.activeElement.tagName)
+        : 'none',
+      mode: document.getElementById('app').dataset.mode,
+      hasFocus: document.hasFocus(),
+    }))()`)
+
+  setTimeout(() => {
+    void (async () => {
+      quick.show()
+      await delay(1500)
+
+      ipcMain.removeAllListeners('ds:quick-submit')
+
+      await quick.window.webContents.executeJavaScript(`(() => {
+        const input = document.getElementById('input')
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+        setter.call(input, '焦点自检')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        document.getElementById('send').focus()
+      })()`)
+      console.log('[焦点测试] 点发送前:', JSON.stringify(await probe()))
+
+      await quick.window.webContents.executeJavaScript(`document.getElementById('send').click()`)
+      await delay(400)
+      console.log('[焦点测试] 发送后:', JSON.stringify(await probe()))
+
+      await quick.window.webContents.executeJavaScript(`document.getElementById('input').blur()`)
+      quick.sendEvent({ type: 'answer-done' })
+      await delay(300)
+      console.log('[焦点测试] answer-done 后:', JSON.stringify(await probe()))
+
+      await quick.window.webContents.executeJavaScript(`(() => {
+        document.getElementById('input').blur()
+        window.dispatchEvent(new Event('focus'))
+      })()`)
+      await delay(300)
+      console.log('[焦点测试] 窗口 focus 后:', JSON.stringify(await probe()))
+    })()
+  }, 5000)
 }
 
 /**
