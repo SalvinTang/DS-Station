@@ -4,6 +4,8 @@ node_modules/
 # ── 构建产物 ──────────────────────────────────────────────────────
 # electron-vite 的输出目录
 out/
+# 生成图标时的中间产物（最终只保留 build/icon.png 与 build/icon.icns）
+build/icon.iconset/
 # electron-builder 的出包目录（P6 打包会产生 .dmg 等）
 dist/
 release/

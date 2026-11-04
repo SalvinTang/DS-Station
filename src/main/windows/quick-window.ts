@@ -127,6 +127,11 @@ export class QuickWindow {
 
     this.window.webContents.on('did-finish-load', () => {
       console.log('[快捷窗口] 界面就绪')
+      /*
+       * 启动时窗口可能先 show()、界面后加载完，那条 ds:quick-shown
+       * 被 send() 的 isLoading 判断丢弃了。补发一次，让焦点落回输入框。
+       */
+      if (this.visible) this.send('ds:quick-shown')
     })
     this.window.webContents.on('did-fail-load', (_event, code, description) => {
       if (code === -3) return

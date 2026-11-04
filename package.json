@@ -12,7 +12,8 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "pack": "node scripts/dist.mjs --dir",
-    "dist": "node scripts/dist.mjs --dmg"
+    "dist": "node scripts/dist.mjs --dmg",
+    "icons": "electron scripts/make-icons.mjs"
   },
   "build": {
     "appId": "com.salvin.dsdesktop",
@@ -21,9 +22,11 @@
       "output": "release"
     },
     "files": [
-      "out/**/*"
+      "out/**/*",
+      "resources/**/*"
     ],
     "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
     "npmRebuild": false,
     "electronDist": "node_modules/electron/dist",
     "artifactName": "DS-Desktop-${version}-${env.BUILD_NUMBER}-${arch}.${ext}",

@@ -38,6 +38,16 @@ export interface Settings {
   window: WindowState
   quickWindow: QuickWindowSettings
   language: Language
+  /**
+   * 上一次确认过的登录状态。
+   *
+   * 只是启动时的提示，不是凭证 —— 真正的登录态由 Electron Session 管。
+   * 用途：已知登录时先把快捷窗口亮出来，再在后台复核，避免每次启动
+   * 都盯着空屏幕等页面加载完。
+   */
+  login: {
+    knownLoggedIn: boolean
+  }
 }
 // 注：构建号不属于用户配置 —— 它随产物走，存在 build-number.json 里，
 // 构建时由 define 注入。老版本 settings.json 里的 build 字段会被忽略。
@@ -53,6 +63,7 @@ const DEFAULTS: Settings = {
     contentHeight: 500,
   },
   language: 'system',
+  login: { knownLoggedIn: false },
 }
 
 /**

@@ -1,4 +1,5 @@
 import type { WebContentsView } from 'electron'
+import { DEEPSEEK_ORIGIN } from '../../shared/constants'
 import { SELECTOR_KEYS, pagePrelude, type SelectorKey } from './selectors'
 
 /**
@@ -16,6 +17,9 @@ export interface SwitchStates {
   deepThink: boolean | null
   smartSearch: boolean | null
 }
+
+/** logged-out 是确定的；unknown 表示页面还没准备好，不代表没登录 */
+export type LoginState = 'logged-in' | 'logged-out' | 'unknown'
 
 /** 轮询间隔：够流畅，也不会给页面太大压力 */
 export const POLL_INTERVAL = 150
@@ -43,6 +47,27 @@ export class DeepSeekPage {
       console.error('[DeepSeek] 页面脚本执行失败:', err)
       return null
     }
+  }
+
+  /**
+   * 登录状态。两个条件缺一不可：
+   *   1. 地址不是登录页 —— 未登录时首页会先渲染一下再跳到 /sign_in
+   *   2. 页面上能找到对话输入框 —— 登录页的账号输入框也可见，不能只看 DOM
+   *
+   * 页面还在加载、或者命令执行失败时返回 'unknown'，交给调用方决定要不要等。
+   */
+  async loginState(): Promise<LoginState> {
+    const url = this.wc.getURL()
+    if (!url.startsWith(DEEPSEEK_ORIGIN)) return 'unknown'
+    if (/\/sign_in(?:$|[/?#])/.test(url)) return 'logged-out'
+
+    const checks = await this.selfCheck()
+    if (!checks) return 'unknown'
+    return checks.composer ? 'logged-in' : 'unknown'
+  }
+
+  async isLoggedIn(): Promise<boolean> {
+    return (await this.loginState()) === 'logged-in'
   }
 
   /** 选择器自检：启动时跑，哪一项挂了立刻能看出来 */

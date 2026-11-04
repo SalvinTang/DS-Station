@@ -64,6 +64,13 @@ export class MainWindow {
       minWidth: MIN_WIDTH,
       minHeight: MIN_HEIGHT,
       title: 'DS Desktop',
+      /*
+       * 先不显示：启动时由 StartupFlow 判断登录状态后决定
+       *   - 已登录 → 只露快捷窗口，主窗口继续隐藏
+       *   - 未登录 → 露主窗口让用户登录
+       * 这样已登录用户启动时不会看到主窗口闪一下。
+       */
+      show: false,
       // hiddenInset：保留系统红绿灯，但让出顶部空间给我们自绘的标题栏
       titleBarStyle: 'hiddenInset',
       trafficLightPosition: { x: 18, y: 15 },

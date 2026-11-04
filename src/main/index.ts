@@ -1,4 +1,6 @@
 import { app, ipcMain } from 'electron'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
 import { translate, type Language } from '../shared/i18n'
 import type {
@@ -14,6 +16,8 @@ import { buildAppMenu } from './menu'
 import { getDeepseekSession } from './session'
 import { currentLanguage, load, messages, save } from './settings'
 import { registerQuickHotkey, toDisplayAccelerator, unregisterAllHotkeys } from './shortcut'
+import { StartupFlow } from './startup'
+import { createTray, refreshTrayMenu, trayDebugState } from './tray'
 import { MainWindow } from './windows/main-window'
 import { QuickWindow } from './windows/quick-window'
 import {
@@ -33,8 +37,20 @@ if (process.env.DS_USER_DATA) {
 
 let mainWindow: MainWindow | null = null
 let quickWindow: QuickWindow | null = null
+let startupFlow: StartupFlow | null = null
 
-const toggleQuickWindow = (): void => quickWindow?.toggle()
+/**
+ * 快捷键 / 菜单「呼出快捷窗口」都走这里。
+ * 未登录时不响应 —— 面板背后没有可用的 DeepSeek 会话，唤出来也做不了事。
+ */
+const toggleQuickWindow = (): void => {
+  if (!startupFlow) return
+  if (!startupFlow.canSummonQuickWindow()) {
+    console.log('[快捷窗口] 未登录，快捷键不响应')
+    return
+  }
+  quickWindow?.toggle()
+}
 
 // 单实例锁：双开会让两个进程争抢同一份 persist:deepseek 分区，
 // 轻则登录态错乱，重则分区损坏。
@@ -48,7 +64,16 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', () => unregisterAllHotkeys())
 
   app.whenReady().then(() => {
+    // 开发/预览时 Dock 还显示 Electron 的默认图标，这里换成自己的。
+    // 打包后由 build/icon.icns 提供，不需要这一步。
+    if (!app.isPackaged) {
+      const devIcon = join(app.getAppPath(), 'build/icon.png')
+      if (existsSync(devIcon)) app.dock?.setIcon(devIcon)
+    }
+
     mainWindow = new MainWindow()
+
+    createTray({ showMainWindow: () => mainWindow?.show() })
 
     // 快捷窗口纯自绘、开销可忽略，直接建好 —— 免得第一次按快捷键要等
     quickWindow = new QuickWindow(
@@ -65,13 +90,34 @@ if (!app.requestSingleInstanceLock()) {
       console.warn('[启动] 快捷键没注册上，可从菜单栏「窗口 → 呼出快捷窗口」进入，或到设置里改键。')
     }
 
-    app.on('activate', () => mainWindow?.show())
+    // 登录门禁：未登录显示主窗口，已登录只显示快捷窗口。
+    // 主窗口创建时是隐藏的（MainWindow 里 show: false），这里决定要不要露出来。
+    startupFlow = new StartupFlow(mainWindow, quickWindow)
+    void startupFlow.start()
+
+    // 启动门禁完成前不响应 activate，否则 macOS 启动时补发的 activate
+    // 会让主窗口在已登录的情况下提前闪出来
+    app.on('activate', () => {
+      if (startupFlow?.isSettled) mainWindow?.show()
+    })
 
     // ── 开发辅助（正式运行不会设置这些环境变量）────────────────
 
     // 在命令行下没法按 ⌥Space、也没法打字，用它跑一遍面板的生命周期
     if (process.env.DS_SHOW_QUICK === '1') {
       runQuickWindowSelfCheck(quickWindow)
+    }
+
+    // 启动门禁自检：看当前该显示哪个窗口；DS_FAKE_LOGIN=1 会模拟一次登录完成
+    if (process.env.DS_STARTUP_TEST === '1') {
+      runStartupSelfCheck(mainWindow, quickWindow, () => startupFlow)
+    }
+
+    // 菜单栏图标自检：tray 有没有建起来、菜单位置和文案对不对
+    if (process.env.DS_TRAY_TEST === '1') {
+      setTimeout(() => {
+        console.log('[菜单栏测试]', JSON.stringify(trayDebugState()))
+      }, 2500)
     }
 
     // DOM 探针：写一份报告，DeepSeek 改版后用来重新对选择器
@@ -114,6 +160,7 @@ if (!app.requestSingleInstanceLock()) {
 // ── 菜单 ────────────────────────────────────────────────────────
 
 function rebuildMenu(): void {
+  refreshTrayMenu()
   buildAppMenu({
     showMainWindow: () => mainWindow?.show(),
     toggleQuickWindow,
@@ -256,9 +303,25 @@ async function handleLogout(): Promise<void> {
   } catch (err) {
     console.error('[设置] 清理登录态失败:', err)
   }
-  void mainWindow?.pageView.webContents.loadURL(DEEPSEEK_URL)
+
+  save({ login: { knownLoggedIn: false } })
+  startupFlow?.onLoggedOut()
   quickWindow?.sendEvent({ type: 'conversation-cleared' })
   quickWindow?.setMode('empty')
+
+  // 退出登录后需要重新登录：把主窗口亮出来，面板收起
+  mainWindow?.show()
+  quickWindow?.hide()
+
+  try {
+    // 等页面真的切成登录页，再开始监听登录完成，
+    // 否则可能拿旧页面的 DOM 误判成「已经登录」
+    await mainWindow?.pageView.webContents.loadURL(DEEPSEEK_URL)
+  } catch (err) {
+    console.error('[设置] 重新加载登录页失败:', err)
+  }
+
+  startupFlow?.watchLogin()
 }
 
 // ── 快捷窗口 ↔ DeepSeek 网页 ──────────────────────────────────────
@@ -451,6 +514,47 @@ function runSettingsSelfCheck(): void {
       rebuildMenu()
     })()
   }, 4000)
+}
+
+/**
+ * 启动门禁自检：打印主窗口/快捷窗口谁可见、登录提示是什么。
+ * `DS_FAKE_LOGIN=1` 会模拟一次登录完成，验证「主窗口收起、快捷窗口出现」。
+ */
+function runStartupSelfCheck(
+  win: MainWindow | null,
+  quick: QuickWindow | null,
+  getFlow: () => StartupFlow | null,
+): void {
+  const readState = (): unknown => ({
+    mainVisible: win?.isVisible ?? null,
+    quickVisible: quick?.isVisible ?? null,
+    knownLoggedIn: load().login.knownLoggedIn,
+    settled: getFlow()?.isSettled ?? null,
+  })
+
+  setTimeout(async () => {
+    console.log('[启动测试] 启动完成:', JSON.stringify(readState()))
+
+    if (process.env.DS_FAKE_LOGIN === '1') {
+      // 走的和真实登录成功完全同一段逻辑
+      getFlow()?.onLoginConfirmed()
+      await delay(1500)
+      console.log('[启动测试] 模拟登录后:', JSON.stringify(readState()))
+    }
+
+    // 模拟按快捷键：未登录时应该没有任何变化；已登录时会 隐藏 → 再显示
+    if (process.env.DS_HOTKEY_TEST === '1') {
+      console.log('[启动测试] 模拟快捷键（1/2）')
+      toggleQuickWindow()
+      await delay(800)
+      console.log('[启动测试] 快捷键后:', JSON.stringify(readState()))
+
+      console.log('[启动测试] 模拟快捷键（2/2）')
+      toggleQuickWindow()
+      await delay(800)
+      console.log('[启动测试] 再按一次后:', JSON.stringify(readState()))
+    }
+  }, 8000)
 }
 
 /**
