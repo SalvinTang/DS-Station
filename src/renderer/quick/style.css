@@ -252,6 +252,35 @@ body {
   margin-left: -2px;
 }
 
+/* 「继续生成」和复制按钮在同一行：复制在左，继续在右 */
+.msg-actions.has-continue {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.continue-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.continue-btn:hover {
+  background: var(--hover-bg);
+}
+
+.continue-btn:focus-visible {
+  outline: 2px solid var(--send-bg);
+  outline-offset: 1px;
+}
+
 .copy-btn {
   width: 20px;
   height: 20px;

@@ -1,6 +1,6 @@
 {
   "name": "ds-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "DS Desktop —— DeepSeek macOS 桌面客户端（非官方）",
   "main": "out/main/index.js",

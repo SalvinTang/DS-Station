@@ -11,6 +11,12 @@ export type QuickEvent =
   | { type: 'answer-update'; text: string }
   /** 回答结束 */
   | { type: 'answer-done' }
+  /**
+   * 停止操作的结果。
+   * stopped=false 表示 DeepSeek 那边没停成功（页面还在生成），界面要恢复成停止态。
+   * canContinue 表示 DeepSeek 页面是否给出了「继续生成」按钮。
+   */
+  | { type: 'answer-stopped'; stopped: boolean; canContinue: boolean }
   /** 主进程改了窗口形态，界面要跟着切（避免两边状态不一致） */
   | { type: 'mode-changed'; mode: QuickMode }
   /** 空态 → 有内容态的窗口展开动画结束，界面可以把内容淡入 */
@@ -86,6 +92,12 @@ export interface DsApi {
 
   /** 提交一条消息，主进程会驱动主窗口里的 DeepSeek 网页完成这次对话 */
   submitQuickMessage: (payload: QuickSubmitPayload) => void
+
+  /** 停止生成：点掉 DeepSeek 页面上的停止按钮 */
+  stopQuickGeneration: () => void
+
+  /** 继续生成：点掉 DeepSeek 页面上的「继续生成」按钮 */
+  continueQuickGeneration: () => void
 
   /** 切换窗口形态：空态 ↔ 有内容 */
   setQuickMode: (mode: QuickMode) => void

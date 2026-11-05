@@ -21,6 +21,14 @@ export interface SwitchStates {
 /** logged-out 是确定的；unknown 表示页面还没准备好，不代表没登录 */
 export type LoginState = 'logged-in' | 'logged-out' | 'unknown'
 
+/**
+ * 取消令牌。
+ * 用户点「停止生成」时把它翻成 true，正在跑的两段轮询会尽快退出。
+ */
+export interface StreamToken {
+  cancelled: boolean
+}
+
 /** 轮询间隔：够流畅，也不会给页面太大压力 */
 export const POLL_INTERVAL = 150
 
@@ -142,6 +150,127 @@ export class DeepSeekPage {
     )
   }
 
+  // ── 停止 / 继续生成 ──────────────────────────────────────────
+
+  /**
+   * 页面是否正在生成回答。
+   *
+   * 生成中发送按钮会变成「停止」：没有 disabled 类，图标是圆角方块。
+   * 实测方块图标的 SVG path 以 `M2 4.88` 开头，完成后会换回向上的箭头。
+   */
+  async isGenerating(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const btn = dsFind('sendButton');
+        if (!btn) return false;
+        if (String(btn.className || '').includes(DS_STATE.buttonDisabled)) return false;
+        const path = btn.querySelector('svg path');
+        return !!path && (path.getAttribute('d') || '').startsWith('M2 4.88');
+      `)) === true
+    )
+  }
+
+  /**
+   * 停止生成：点页面上的停止按钮。
+   *
+   * 刚发出消息的几百毫秒里按钮还没切到停止态，此时点它等于「再次发送」。
+   * 所以先确认图标已经是方块，再点。
+   */
+  async stopGenerating(timeoutMs = 2500): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+
+    while (Date.now() < deadline) {
+      if (await this.isGenerating()) {
+        return (
+          (await this.run<boolean>(`
+            const btn = dsFind('sendButton');
+            if (!btn) return false;
+            dsDeepest(btn).click();
+            return true;
+          `)) === true
+        )
+      }
+      await delay(150)
+    }
+
+    return false
+  }
+
+  /** 页面上是否有可点的「继续生成」按钮（只有最新一条被截断的回答才有） */
+  async hasContinueButton(): Promise<boolean> {
+    return (await this.run<boolean>(`return !!dsFindContinue();`)) === true
+  }
+
+  /**
+   * 点「继续生成」。
+   *
+   * 这个按钮对合成 click 不响应（实测 .click() 和 pointer 事件都没用，
+   * React 组件大概率检查了 isTrusted），必须用 sendInputEvent 模拟真实鼠标。
+   * 坐标取按钮滚动到视口中央后的矩形中心。
+   */
+  async continueGenerating(): Promise<boolean> {
+    /*
+     * 主窗口隐藏时，DeepSeek 页面最上层会铺一个全屏透明层
+     * （实测 div._4cbcd96，覆盖整个视口，pointer-events: auto），
+     * 真实鼠标事件会被它吃掉，点不到下面的按钮。
+     *
+     * 所以点击前把「挡在按钮和视口之间的元素」临时改成 pointer-events: none，
+     * 点完立刻恢复。只动 pointer-events，不动布局和 React 状态。
+     */
+    const prepared = await this.run<{ x: number; y: number } | null>(`
+      const btn = dsFindContinue();
+      if (!btn) return null;
+      btn.scrollIntoView({ block: 'center' });
+
+      const r = btn.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return null;
+
+      const x = Math.round(Math.min(Math.max(r.x + r.width / 2, 1), window.innerWidth - 1));
+      const y = Math.round(Math.min(Math.max(r.y + r.height / 2, 1), window.innerHeight - 1));
+
+      const stack = document.elementsFromPoint(x, y);
+      const blockers = stack.filter(
+        (el) => el !== btn && !btn.contains(el) && !el.contains(btn),
+      );
+      window.__dsBlockers = blockers.map((el) => [el, el.style.pointerEvents]);
+      for (const el of blockers) el.style.pointerEvents = 'none';
+
+      return { x, y };
+    `)
+
+    if (!prepared) return false
+
+    try {
+      this.wc.sendInputEvent({ type: 'mouseMove', x: prepared.x, y: prepared.y })
+      this.wc.sendInputEvent({
+        type: 'mouseDown',
+        x: prepared.x,
+        y: prepared.y,
+        button: 'left',
+        clickCount: 1,
+      })
+      this.wc.sendInputEvent({
+        type: 'mouseUp',
+        x: prepared.x,
+        y: prepared.y,
+        button: 'left',
+        clickCount: 1,
+      })
+    } finally {
+      await this.run(`
+        const saved = window.__dsBlockers || [];
+        for (const [el, prev] of saved) {
+          try { el.style.pointerEvents = prev; } catch (e) {}
+        }
+        window.__dsBlockers = null;
+        return true;
+      `)
+    }
+
+    console.log(`[快捷窗口] 继续生成 → 已点击 (${prepared.x}, ${prepared.y})`)
+    return true
+  }
+
   /**
    * 开启新对话。
    *
@@ -248,11 +377,16 @@ export class DeepSeekPage {
    * 而发送后页面跳转到新会话的瞬间又会短暂返回空数组。
    * 比较**最后一条回答的文本**最稳 —— 只要它跟发送前不一样，就是新的。
    */
-  async waitForAnswerChange(baseline: string[], timeoutMs = 45000): Promise<boolean> {
+  async waitForAnswerChange(
+    baseline: string[],
+    timeoutMs = 45000,
+    token?: StreamToken,
+  ): Promise<boolean> {
     const baseLast = baseline.length ? baseline[baseline.length - 1] : ''
     const deadline = Date.now() + timeoutMs
 
     while (Date.now() < deadline) {
+      if (token?.cancelled) return false
       const answers = await this.listAnswers()
       const last = answers.length ? answers[answers.length - 1] : ''
       if (last && last !== baseLast) return true
@@ -265,13 +399,19 @@ export class DeepSeekPage {
    * 盯住最后一条回答，每变一次就回调一次，直到它稳定下来。
    * 返回是否成功拿到过内容。
    */
-  async streamLastAnswer(onUpdate: (text: string) => void, timeoutMs = 120000): Promise<boolean> {
+  async streamLastAnswer(
+    onUpdate: (text: string) => void,
+    timeoutMs = 120000,
+    token?: StreamToken,
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     let last = ''
     let lastChangedAt = Date.now()
     let sawAnything = false
 
     while (Date.now() < deadline) {
+      // 用户点了停止：立刻退出，不再推增量
+      if (token?.cancelled) return sawAnything
       const answers = await this.listAnswers()
       const current = answers.length ? answers[answers.length - 1] : ''
 

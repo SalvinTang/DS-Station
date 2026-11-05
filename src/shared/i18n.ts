@@ -68,6 +68,8 @@ const zh = {
   'quick.newChat': '新对话',
   'quick.expand': '在主窗口打开',
   'quick.error': '出错了',
+  'quick.stop': '停止生成',
+  'quick.continue': '继续生成',
 } as const
 
 export type MessageKey = keyof typeof zh
@@ -129,6 +131,8 @@ const en: Record<MessageKey, string> = {
   'quick.newChat': 'New chat',
   'quick.expand': 'Open in main window',
   'quick.error': 'Something went wrong',
+  'quick.stop': 'Stop generating',
+  'quick.continue': 'Continue generating',
 }
 
 const DICTIONARIES: Record<ResolvedLanguage, Record<MessageKey, string>> = { zh, en }

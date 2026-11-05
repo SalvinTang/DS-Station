@@ -11,7 +11,7 @@ import type {
 } from '../shared/types'
 import { setQuitting } from './app-state'
 import { writeDomReport } from './deepseek/inspector'
-import { DeepSeekPage, delay } from './deepseek/page-driver'
+import { DeepSeekPage, delay, type StreamToken } from './deepseek/page-driver'
 import { buildAppMenu } from './menu'
 import { getDeepseekSession } from './session'
 import { currentLanguage, load, messages, save } from './settings'
@@ -54,6 +54,12 @@ if (process.env.DS_USER_DATA) {
 let mainWindow: MainWindow | null = null
 let quickWindow: QuickWindow | null = null
 let startupFlow: StartupFlow | null = null
+
+/**
+ * 当前这一轮生成的取消令牌。
+ * 用户点「停止生成」时先把它翻成 true，正在跑的轮询会尽快退出。
+ */
+let activeToken: StreamToken | null = null
 
 /**
  * 快捷键 / 菜单「呼出快捷窗口」都走这里。
@@ -191,6 +197,12 @@ if (!app.requestSingleInstanceLock()) {
       void runChatSelfCheck(mainWindow, quickWindow)
     }
 
+    // 停止生成自检：发送 → 停止 → 继续 → 再停止
+    // ★ 会往账号发一条测试消息
+    if (process.env.DS_STOP_TEST === '1') {
+      runStopSelfCheck(mainWindow, quickWindow)
+    }
+
     // 「新对话」按钮自检：发一条、点新对话、再发一条，看会话 URL 有没有变
     // ★ 会往账号里发两条测试消息
     if (process.env.DS_NEWCHAT_TEST === '1') {
@@ -289,6 +301,9 @@ function registerIpcHandlers(): void {
   ipcMain.on('ds:quick-submit', (_event, payload: QuickSubmitPayload) => {
     void handleQuickSubmit(payload)
   })
+
+  ipcMain.on('ds:quick-stop', () => void handleStopGeneration())
+  ipcMain.on('ds:quick-continue', () => void handleContinueGeneration())
 }
 
 // ── 设置 ────────────────────────────────────────────────────────
@@ -352,6 +367,8 @@ async function handleLogout(): Promise<void> {
     console.error('[设置] 清理登录态失败:', err)
   }
 
+  if (activeToken) activeToken.cancelled = true
+
   save({ login: { knownLoggedIn: false } })
   startupFlow?.onLoggedOut()
   quickWindow?.sendEvent({ type: 'conversation-cleared' })
@@ -386,6 +403,8 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
   if (!win || !quick) return
 
   const page = new DeepSeekPage(win.pageView)
+  const token: StreamToken = { cancelled: false }
+  activeToken = token
 
   try {
     /*
@@ -423,19 +442,134 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
 
     quick.sendEvent({ type: 'answer-start' })
 
-    const appeared = await page.waitForAnswerChange(baseline)
+    const appeared = await page.waitForAnswerChange(baseline, 45000, token)
+    if (token.cancelled) return
     if (!appeared) throw new Error('等不到新的回答')
 
-    const got = await page.streamLastAnswer((text) => {
-      quick.sendEvent({ type: 'answer-update', text })
-    })
+    const got = await page.streamLastAnswer(
+      (text) => {
+        quick.sendEvent({ type: 'answer-update', text })
+      },
+      120000,
+      token,
+    )
 
+    if (token.cancelled) return
     if (!got) throw new Error('没有读到回答')
   } catch (err) {
+    // 用户点了停止：轮询提前退出，这不是错误，也不该再推 answer-done
+    if (token.cancelled) return
     const message = err instanceof Error ? err.message : String(err)
     console.error('[快捷窗口] 提问失败:', message)
     quick.sendEvent({ type: 'error', message })
     return
+  } finally {
+    if (activeToken === token) activeToken = null
+  }
+
+  quick.sendEvent({ type: 'answer-done' })
+}
+
+/**
+ * 停止生成：点掉 DeepSeek 页面上的停止按钮，并告诉面板停在哪。
+ *
+ * 面板在点击的那一刻就已经把按钮切回发送态（乐观更新）。
+ * 这里只有在真的停成功之后才取消轮询；如果没停成，就让回答继续流，
+ * 并通知界面把按钮恢复成停止态。
+ */
+async function handleStopGeneration(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+
+  const token = activeToken
+  if (!token) {
+    console.log('[快捷窗口] 没有正在生成的任务，忽略停止')
+    return
+  }
+
+  const page = new DeepSeekPage(win.pageView)
+  const stopped = await page.stopGenerating()
+  console.log(`[快捷窗口] 停止生成 → ${stopped ? '已点击停止' : '没找到停止按钮'}`)
+
+  if (!stopped) {
+    // 页面还在生成：不取消轮询，让回答继续更新；界面会恢复停止态
+    quick.sendEvent({ type: 'answer-stopped', stopped: false, canContinue: false })
+    return
+  }
+
+  token.cancelled = true
+
+  // 给页面一点时间把「继续生成」渲染出来
+  await delay(600)
+  const canContinue = await page.hasContinueButton()
+
+  quick.sendEvent({ type: 'answer-stopped', stopped: true, canContinue })
+}
+
+/**
+ * 继续生成：点页面上的「继续生成」，然后重新进入流式读取。
+ *
+ * 一条被截断的回答继续增长时，`waitForAnswerChange` 拿当前文本当 baseline，
+ * 只要文本变了就说明续上了；之后复用 `streamLastAnswer`。
+ */
+async function handleContinueGeneration(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+  if (activeToken) {
+    console.log('[快捷窗口] 已经在生成中，忽略继续')
+    return
+  }
+
+  const page = new DeepSeekPage(win.pageView)
+  const baseline = await page.listAnswers()
+  const started = await page.continueGenerating()
+  if (!started) {
+    console.error('[快捷窗口] 继续生成失败：没找到按钮')
+    quick.sendEvent({
+      type: 'answer-stopped',
+      stopped: true,
+      canContinue: await page.hasContinueButton(),
+    })
+    return
+  }
+
+  const token: StreamToken = { cancelled: false }
+  activeToken = token
+  quick.sendEvent({ type: 'answer-start' })
+
+  try {
+    // 10 秒还没续上，就把「继续生成」还给用户，不要一直卡在生成态
+    const appeared = await page.waitForAnswerChange(baseline, 10000, token)
+    if (token.cancelled) return
+    if (!appeared) {
+      quick.sendEvent({
+        type: 'answer-stopped',
+        stopped: true,
+        canContinue: await page.hasContinueButton(),
+      })
+      return
+    }
+
+    const got = await page.streamLastAnswer(
+      (text) => {
+        quick.sendEvent({ type: 'answer-update', text })
+      },
+      120000,
+      token,
+    )
+
+    if (token.cancelled) return
+    if (!got) throw new Error('没有读到回答')
+  } catch (err) {
+    if (token.cancelled) return
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[快捷窗口] 继续生成失败:', message)
+    quick.sendEvent({ type: 'error', message })
+    return
+  } finally {
+    if (activeToken === token) activeToken = null
   }
 
   quick.sendEvent({ type: 'answer-done' })
@@ -445,6 +579,9 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
 async function startNewChatOnPage(): Promise<void> {
   const win = mainWindow
   if (!win) return
+
+  // 如果上一轮还在生成，先让它停下来，避免旧轮询继续读新会话
+  if (activeToken) activeToken.cancelled = true
 
   // 面板立刻开始收起（反向动画）；页面那边并行去开新对话，
   // 动画结束时 setMode 会通知界面清空并切回空态。
@@ -749,6 +886,83 @@ async function runNewChatSelfCheck(
   await delay(10_000)
   console.log('[新对话测试] 第二条后 URL:', win.pageView.webContents.getURL())
   console.log('[新对话测试] 第二条后面板:', JSON.stringify(await panelState()))
+}
+
+/**
+ * 停止生成自检：发送 → 生成中停止 → 继续 → 再停止。
+ *
+ * ★ 会往当前登录的 DeepSeek 账号发一条测试消息。
+ */
+function runStopSelfCheck(win: MainWindow | null, quick: QuickWindow | null): void {
+  if (!win || !quick) return
+
+  const page = new DeepSeekPage(win.pageView)
+
+  const panelState = (): Promise<unknown> =>
+    quick.window.webContents.executeJavaScript(`(() => {
+      const send = document.getElementById('send')
+      const bodies = document.querySelectorAll('.msg-ai .body')
+      const last = bodies[bodies.length - 1]
+      return {
+        mode: document.getElementById('app').dataset.mode,
+        stopIcon: !!send.querySelector('svg rect'),
+        sendDisabled: send.disabled,
+        continueButton: !!document.querySelector('.continue-btn'),
+        groups: document.getElementById('messagesInner').children.length,
+        hasFocus: document.hasFocus(),
+        tail: last ? (last.innerText || '').slice(-40) : '',
+      }
+    })()`)
+
+  setTimeout(() => {
+    void (async () => {
+      quick.show()
+      await delay(1500)
+
+      await quick.window.webContents.executeJavaScript(`(() => {
+        const input = document.getElementById('input')
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set
+        setter.call(input, '自动化测试-停止生成：请用 800 字左右详细解释什么是量子纠缠。')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        document.getElementById('send').click()
+      })()`)
+
+      // 等回答正文真的出现再停止，避免模型还没开口就点掉
+      let waited = 0
+      while (waited < 12000) {
+        const state = (await panelState()) as { tail?: string }
+        if (state.tail && state.tail.length > 0) break
+        await delay(300)
+        waited += 300
+      }
+      console.log(`[停止测试] 等回答 ${waited}ms 后（面板）:`, JSON.stringify(await panelState()))
+      console.log('[停止测试] 生成中（页面）:', await page.isGenerating())
+
+      // 点面板上的停止
+      await quick.window.webContents.executeJavaScript(`document.getElementById('send').click()`)
+      await delay(150)
+      console.log('[停止测试] 点击后 150ms（面板）:', JSON.stringify(await panelState()))
+      await delay(2050)
+      console.log('[停止测试] 停止后（面板）:', JSON.stringify(await panelState()))
+      console.log('[停止测试] 停止后（页面有继续按钮）:', await page.hasContinueButton())
+
+      // 点「继续生成」
+      await quick.window.webContents.executeJavaScript(
+        `document.querySelector('.continue-btn')?.click()`,
+      )
+      await delay(800)
+      console.log('[停止测试] 继续点击后（面板）:', JSON.stringify(await panelState()))
+
+      await delay(3000)
+      console.log('[停止测试] 继续 3 秒后（面板）:', JSON.stringify(await panelState()))
+      console.log('[停止测试] 继续 3 秒后（页面）:', await page.isGenerating())
+
+      // 再停一次，别让测试会话一直生成下去
+      await quick.window.webContents.executeJavaScript(`document.getElementById('send').click()`)
+      await delay(1500)
+      console.log('[停止测试] 再次停止后（面板）:', JSON.stringify(await panelState()))
+    })()
+  }, 6000)
 }
 
 /**

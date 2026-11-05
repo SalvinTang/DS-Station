@@ -190,6 +190,27 @@ export function pagePrelude(): string {
       return dsPick(key, requireVisible);
     };
 
+    /**
+     * 「继续生成」按钮。
+     *
+     * 只有被用户主动停止的最后一条回答下方才会出现。
+     * 结构是一个 role=button 的胶囊，文字节点在 .ds-button__content 里，
+     * 所以按**外层按钮的合并文本**匹配，返回外层 —— 点击坐标也以外层为准。
+     */
+    const dsFindContinue = () => {
+      const labels = ['继续生成', 'Continue generating', 'Continue'];
+      const nodes = Array.from(
+        document.querySelectorAll('[role="button"], button, .ds-button'),
+      );
+      for (const el of nodes) {
+        if (!dsVisible(el)) continue;
+        const text = dsText(el);
+        if (!text || text.length > 24) continue;
+        if (labels.some((label) => text === label || text.endsWith(label))) return el;
+      }
+      return null;
+    };
+
     /** 元素是否处于「开」的状态 */
     const dsIsOn = (el) => {
       if (!el) return null;
