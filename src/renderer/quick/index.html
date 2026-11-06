@@ -52,6 +52,8 @@
       <!-- ── 对话区（仅「有内容」态）── -->
       <div class="messages" id="messages">
         <div class="messages-inner" id="messagesInner"></div>
+        <!-- 新消息顶到最上面时，用它补足下方可滚动的空间；回答结束就收回 -->
+        <div class="messages-tail" id="messagesTail" aria-hidden="true"></div>
       </div>
 
       <!-- ── 输入区：空态时它就是整个外框 ── -->
@@ -65,10 +67,21 @@
           autocomplete="off"
         ></textarea>
 
+        <!-- 浮在输入框上方的「滚动到底部」：位置跟着输入框顶部走 -->
+        <button id="scrollBottom" class="scroll-btn" type="button" title="滚动到底部" aria-label="滚动到底部">
+          <svg viewBox="0 0 1024 1024" width="12" height="12" aria-hidden="true">
+            <path
+              fill="currentColor"
+              transform="rotate(-90 512 512)"
+              d="M368.8 512L790 104.9c24.8-24 24.8-62.9 0-86.9s-65.1-24-89.9 0L234 468.6c-24.8 24-24.8 62.9 0 86.9L700.1 1006c12.4 12 28.7 18 45 18s32.5-6 44.9-18c24.8-24 24.8-62.9 0-86.9L368.8 512z"
+            />
+          </svg>
+        </button>
+
         <div class="toolbar">
           <button id="deepThink" class="tool-btn" type="button" aria-pressed="false"
                   title="深度思考" aria-label="深度思考">
-            <svg viewBox="0 0 16 16" width="20" height="20" fill="none" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
               <path
                 fill="currentColor"
                 d="M8 6.77c0.679 0 1.23 0.551 1.23 1.23s-0.551 1.23-1.23 1.23S6.77 8.679 6.77 8 7.321 6.77 8 6.77z"
@@ -88,11 +101,12 @@
                 d="M10.731 5.269C13.936 8.474 15.31 12.294 13.802 13.802 12.294 15.31 8.475 13.936 5.27 10.731 2.065 7.526 0.69 3.706 2.198 2.198 3.706 0.69 7.526 2.064 10.731 5.269z"
               />
             </svg>
+            <span id="deepThinkLabel" class="tool-label">深度</span>
           </button>
 
           <button id="smartSearch" class="tool-btn" type="button" aria-pressed="false"
                   title="智能搜索" aria-label="智能搜索">
-            <svg viewBox="0 0 16 16" width="20" height="20" fill="none" aria-hidden="true">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
               <circle cx="8" cy="8" r="6.84" stroke="currentColor" stroke-width="1.4" />
               <path d="M1.64 8h12.72" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
               <path
@@ -104,12 +118,13 @@
                 stroke="currentColor" stroke-width="1.4" stroke-linecap="round"
               />
             </svg>
+            <span id="smartSearchLabel" class="tool-label">搜索</span>
           </button>
 
           <div class="spacer"></div>
 
           <button id="send" class="send-btn" type="button" disabled title="发送" aria-label="发送">
-            <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+            <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
               <path
                 fill="currentColor"
                 d="M9.551 0.39c0.301-0.046 0.597-0.035 0.898 0 0.511 0.1 0.958 0.306 1.366 0.619 0.323 0.247 0.672 0.582 1.03 0.923l6.796 6.472-2.033 1.936-6.171-5.877v15.177h-2.875V4.463L2.391 10.341 0.359 8.405 7.154 1.932C7.513 1.591 7.862 1.256 8.185 1.009 8.529 0.745 8.971 0.477 9.551 0.39z"

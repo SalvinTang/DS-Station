@@ -1,11 +1,13 @@
 /*
- * 快捷窗口。数值全部取自 Design/设计稿001 + Design/ui尺寸.html：
- *   空态外框 400×100，圆角 20，底色 #2C2C2E，1px 描边 #797979
- *   有内容态外框 420 宽，圆角 30，底色 #151517，同款描边
- *   输入框 400×100，圆角 20，底色 #2C2C2E，同款描边
- *   输入文字 16px / 行高 22px，左 14 上 16
+ * 快捷窗口。数值取自 Design/设计稿/快捷窗口UI调整.html + 优化内容展示.html：
+ *   空态外框 400×100，圆角 20；深色 #2C2C2E / 描边 #4E5151，浅色 #FFFFFF / 描边 #797979
+ *   有内容态外框 420 宽，圆角 30，底色 #151517，描边 #797979
+ *   输入框内容：左 13 / 上 16，文字 16px / 行高 22px，占位符 #999999
+ *   功能按钮：高 26 的胶囊，图标 14，文字 12px
+ *   发送按钮：30×30 圆形，图标 12，可点 #3964FE / 悬停 #5686FE
  *   顶栏 高 40，圆角 29（与外框内缘对齐），底色 #232328，移出 1 秒消失
  *   用户气泡 #133463，圆角 10，最大宽度 75%
+ *   滚动到底部按钮 30×30，浮在输入框上方 11px，水平居中
  */
 
 :root {
@@ -15,19 +17,33 @@
   --frame-empty: #ffffff;
   --frame-content: #ffffff;
   --frame-border: #c9c9cf;
+  --empty-border: #797979;
   --composer-bg: #f3f3f5;
   --composer-border: #c9c9cf;
 
   --text: #1b1b1f;
-  --placeholder: #717582;
-  --icon: #0f1114;
-  --icon-active: #5686fe;
+  --placeholder: #999999;
 
-  --send-bg: #5686fe;
-  --send-hover: #3d69fe;
+  /* 功能按钮（深度 / 搜索）：未激活 / 已激活 */
+  --tool-bg: #ffffff;
+  --tool-border: #e6e6e6;
+  --tool-fg: #151721;
+  --tool-icon: #0f1114;
+  --tool-bg-active: #e8f0fe;
+  --tool-border-active: #b7c8fe;
+  --tool-fg-active: #3964fe;
+  --tool-icon-active: #5686fe;
+
+  --send-bg: #3964fe;
+  --send-hover: #5686fe;
   --send-disabled: #b0c1ff;
   --send-fg: #ffffff;
-  --send-disabled-fg: #717582;
+  --send-disabled-fg: #ffffff;
+
+  /* 滚动到底部按钮 */
+  --scroll-bg: #ffffff;
+  --scroll-border: #e6e6e6;
+  --scroll-fg: #151721;
 
   --user-bubble: #133463;
   --user-bubble-fg: #ffffff;
@@ -45,15 +61,28 @@
     --frame-empty: #2c2c2e;
     --frame-content: #151517;
     --frame-border: #797979;
+    --empty-border: #4e5151;
     --composer-bg: #2c2c2e;
     --composer-border: #797979;
 
     --text: #ffffff;
-    --placeholder: #717582;
-    --icon: #ffffff;
-    --icon-active: #5686fe;
+    --placeholder: #999999;
+
+    --tool-bg: #2c2c2e;
+    --tool-border: #797979;
+    --tool-fg: #ffffff;
+    --tool-icon: #ffffff;
+    --tool-bg-active: #34415b;
+    --tool-border-active: #4868b2;
+    --tool-fg-active: #679efe;
+    --tool-icon-active: #517eea;
 
     --send-disabled: #3c5082;
+    --send-disabled-fg: #717582;
+
+    --scroll-bg: #2c2c2e;
+    --scroll-border: #797979;
+    --scroll-fg: #ffffff;
 
     --topbar-bg: #232328;
     --topbar-fg: #ababab;
@@ -104,6 +133,7 @@ body {
 
 .app[data-mode='empty'] {
   background: var(--frame-empty);
+  border-color: var(--empty-border);
   border-radius: 20px;
 }
 
@@ -195,11 +225,17 @@ body {
   display: flex;
   flex-direction: column;
   /*
-   * 顶栏高 40，再留 25px —— 设计稿里第一条内容距外框顶 65px。
-   * 顶栏收起时内容仍然从 65px 开始，不会上下跳。
+   * 第一条内容距窗口顶 = 外框 1 + 消息区 9 + 40 = 50：
+   * 正好是「顶栏 40 高 + 下面 10px」。
+   * 新消息也顶到这条线上（main.ts 里的 TOPBAR_HEIGHT + MESSAGE_TOP_GAP）。
    */
-  padding-top: 55px;
+  padding-top: 41px;
   padding-bottom: 10px;
+}
+
+/* 只用来给「新消息顶到最上面」补滚动余量，高度由 main.ts 计算，回答结束归零 */
+.messages-tail {
+  height: 0;
 }
 
 .msg-group {
@@ -337,13 +373,14 @@ body {
 /* ── 输入区 ─────────────────────────────────────────────── */
 
 /*
- * 内边距按设计稿反推：外框 1px 描边 + 这些值 = 上 16 / 左 14 / 右 11 / 下 10。
- * 输入框内文字 28 高、工具栏 36 高。
+ * 内边距按设计稿反推：外框 1px 描边 + 这些值 = 上 16 / 左 13 / 右 11 / 下 8。
+ * 输入框文字 28 高、工具栏 36 高；底部一行胶囊 26、发送按钮 30，正好落在设计位置。
  */
 .composer {
+  position: relative;
   display: flex;
   flex-direction: column;
-  padding: 15px 10px 9px 13px;
+  padding: 15px 10px 7px 12px;
   /* 展开动画期间先藏起来，动画结束再淡入 */
   transition: opacity 0.22s ease;
 }
@@ -375,6 +412,41 @@ body {
 .app.content-leave .composer,
 .app.content-leave .topbar {
   opacity: 0;
+}
+
+/*
+ * 「滚动到底部」浮在输入框正上方 11px、水平居中。
+ * 挂在 .composer 里，输入框长高时它会跟着一起上移（设计稿 1.3）。
+ */
+.scroll-btn {
+  position: absolute;
+  left: 50%;
+  top: -41px;
+  transform: translateX(-50%);
+  z-index: 5;
+
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--scroll-border);
+  border-radius: 50%;
+  background: var(--scroll-bg);
+  color: var(--scroll-fg);
+  cursor: pointer;
+
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.scroll-btn.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.app[data-mode='empty'] .scroll-btn {
+  display: none;
 }
 
 .input {
@@ -417,31 +489,51 @@ body {
   flex: 1;
 }
 
+/* 设计稿：高 26 的胶囊，图标 14、文字 12px，内缩 7 / 9 */
 .tool-btn {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--icon);
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--tool-border);
+  border-radius: 13px;
+  background: var(--tool-bg);
+  color: var(--tool-fg);
+  font: inherit;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.tool-btn svg {
+  flex: none;
+  color: var(--tool-icon);
+  transition: color 0.14s ease;
+}
+
+.tool-label {
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .tool-btn:hover {
   background: var(--hover-bg);
 }
 
-/* 设计稿：浅色是关闭状态，蓝色是开启状态 */
+/* 设计稿：白色是关闭状态，蓝色是开启状态 */
 .tool-btn[aria-pressed='true'] {
-  color: var(--icon-active);
+  background: var(--tool-bg-active);
+  border-color: var(--tool-border-active);
+  color: var(--tool-fg-active);
+}
+
+.tool-btn[aria-pressed='true'] svg {
+  color: var(--tool-icon-active);
 }
 
 .send-btn {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border: 0;
@@ -466,7 +558,8 @@ body {
 .tool-btn:focus-visible,
 .send-btn:focus-visible,
 .tb-btn:focus-visible,
-.copy-btn:focus-visible {
+.copy-btn:focus-visible,
+.scroll-btn:focus-visible {
   outline: 2px solid var(--send-bg);
   outline-offset: 1px;
 }

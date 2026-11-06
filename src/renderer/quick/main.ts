@@ -12,13 +12,24 @@ const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
 /** 一行的高度：line-height 22 + 上下 padding 各 3 */
 const TEXTAREA_MIN = 28
-/** 输入框之外的固定开销：外框描边 2 + 上下 padding 15/9 + 工具栏 36 */
-const COMPOSER_CHROME = 62
+/** 输入框之外的固定开销：外框描边 2 + 上下 padding 15/7 + 工具栏 36 */
+const COMPOSER_CHROME = 60
 /** 窗口最高 200，输入框最多占 138，再多就出滚动条 */
 const TEXTAREA_MAX = MAX_WINDOW_HEIGHT - COMPOSER_CHROME
 
 /** 设计稿（ui尺寸.html）：鼠标移出窗口 1 秒后顶栏自动消失 */
 const TOPBAR_HIDE_DELAY = 1000
+
+/** 顶栏高 40；新消息的顶端对齐到它下面 10px */
+const TOPBAR_HEIGHT = 40
+const MESSAGE_TOP_GAP = 10
+const MESSAGE_TOP_ANCHOR = TOPBAR_HEIGHT + MESSAGE_TOP_GAP
+/**
+ * 补位空间多留一点富余：等待回答的呼吸点只有几像素高，
+ * 回答开始时它会被移除，若可滚动高度刚好卡满，scrollTop 会被浏览器夹一下，
+ * 消息就会往下漂几像素。
+ */
+const TAIL_SLACK = 16
 
 const COPY_ICON = `
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
@@ -27,17 +38,17 @@ const COPY_ICON = `
 
 /** 默认发送图标（向上箭头）。HTML 里也有一份，状态切换时用这里覆盖 */
 const SEND_ICON = `
-  <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+  <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
     <path
       fill="currentColor"
       d="M9.551 0.39c0.301-0.046 0.597-0.035 0.898 0 0.511 0.1 0.958 0.306 1.366 0.619 0.323 0.247 0.672 0.582 1.03 0.923l6.796 6.472-2.033 1.936-6.171-5.877v15.177h-2.875V4.463L2.391 10.341 0.359 8.405 7.154 1.932C7.513 1.591 7.862 1.256 8.185 1.009 8.529 0.745 8.971 0.477 9.551 0.39z"
     />
   </svg>`
 
-/** 生成中的停止图标：白色圆角方块（设计稿尺寸约 13×13，圆角 4） */
+/** 生成中的停止图标：白色圆角方块（设计稿 30px 圆内 10×10，圆角 2） */
 const STOP_ICON = `
-  <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
-    <rect x="3.5" y="3.5" width="13" height="13" rx="4" fill="currentColor" />
+  <svg viewBox="0 0 30 30" width="30" height="30" aria-hidden="true">
+    <rect x="10" y="10" width="10" height="10" rx="2" fill="currentColor" />
   </svg>`
 
 const DONE_ICON = `
@@ -63,10 +74,15 @@ function t(key: string, vars?: Record<string, string | number>): string {
 function applyMessages(): void {
   input.placeholder = t('quick.placeholder')
 
+  // 胶囊里显示的是短标签，完整名称留在 title / aria-label
+  if (deepThinkLabel) deepThinkLabel.textContent = t('quick.deepThinkShort')
+  if (smartSearchLabel) smartSearchLabel.textContent = t('quick.smartSearchShort')
+
   const labelled: [Element | null, string][] = [
     [deepThinkButton, 'quick.deepThink'],
     [smartSearchButton, 'quick.smartSearch'],
     [sendButton, 'quick.send'],
+    [scrollBottomButton, 'quick.scrollBottom'],
     [tbClose, 'quick.close'],
     [tbNewChat, 'quick.newChat'],
     [tbExpand, 'quick.expand'],
@@ -90,11 +106,15 @@ const app = document.getElementById('app') as HTMLElement
 const topbar = document.getElementById('topbar') as HTMLElement
 const messages = document.getElementById('messages') as HTMLElement
 const messagesInner = document.getElementById('messagesInner') as HTMLElement
+const messagesTail = document.getElementById('messagesTail') as HTMLElement
 
 const input = document.getElementById('input') as HTMLTextAreaElement
 const deepThinkButton = document.getElementById('deepThink')
 const smartSearchButton = document.getElementById('smartSearch')
+const deepThinkLabel = document.getElementById('deepThinkLabel')
+const smartSearchLabel = document.getElementById('smartSearchLabel')
 const sendButton = document.getElementById('send') as HTMLButtonElement
+const scrollBottomButton = document.getElementById('scrollBottom') as HTMLButtonElement
 
 const tbClose = document.getElementById('tbClose')
 const tbNewChat = document.getElementById('tbNewChat')
@@ -174,8 +194,99 @@ function togglePressed(element: Element | null): void {
 
 // ── 消息渲染 ──────────────────────────────────────────────────
 
-function scrollToBottom(): void {
-  messages.scrollTop = messages.scrollHeight
+/** 距离底部 4px 以内算「已经在底部」 */
+const BOTTOM_EPSILON = 4
+
+/**
+ * 消息内容的底边（不含 messagesTail 补位）在滚动坐标系里的位置。
+ * 用 rect 而不是 scrollHeight —— 内容比视口短时 scrollHeight 会被夹到视口高度。
+ */
+function contentBottom(): number {
+  const containerTop = messages.getBoundingClientRect().top
+  return messagesInner.getBoundingClientRect().bottom - containerTop + messages.scrollTop
+}
+
+function isAtBottom(): boolean {
+  return contentBottom() - (messages.scrollTop + messages.clientHeight) <= BOTTOM_EPSILON
+}
+
+/**
+ * 程序触发的平滑滚动期间先别让「滚动到底部」按钮冒出来：
+ * 用户点按钮时它应该立刻消失，而不是跟着滚到底部才消失；
+ * 新消息往上滚的动画过程中也不应该闪一下。
+ */
+let suppressScrollButton = false
+let suppressScrollTimer: number | undefined
+
+function suppressScrollButtonDuringAnimation(): void {
+  suppressScrollButton = true
+  scrollBottomButton.classList.remove('show')
+  if (suppressScrollTimer) window.clearTimeout(suppressScrollTimer)
+  // scrollend 没触发时兜底（smooth 滚动一般 300–500ms）
+  suppressScrollTimer = window.setTimeout(() => {
+    suppressScrollButton = false
+    suppressScrollTimer = undefined
+    updateScrollButton()
+  }, 1200)
+}
+
+/** 设计稿（优化内容展示）：不在底部时浮出「滚动到底部」按钮。
+ * 生成文字时**不自动跟随**，所以新内容长出来之后这个按钮会重新出现。
+ */
+function updateScrollButton(): void {
+  if (suppressScrollButton) {
+    scrollBottomButton.classList.remove('show')
+    return
+  }
+  const scrollable = contentBottom() - messages.clientHeight > 8
+  scrollBottomButton.classList.toggle('show', mode === 'content' && scrollable && !isAtBottom())
+}
+
+/**
+ * 把刚发出的用户消息顶到「顶栏下方 10px」。
+ *
+ * 内容底部不够长时，光滚动是到不了那个位置的（滚动会夹在底部），
+ * 所以先用 messagesTail 在下面补足一段空白，回答结束再收回。
+ *
+ * animate：第二条及以后的消息，先让气泡出现在可视区底部，再平滑滚上去，
+ * 避免内容一下子「跳」到顶部。
+ */
+function alignMessageToTop(group: HTMLElement, animate: boolean): void {
+  messagesTail.style.height = '0px'
+
+  const messageTop =
+    group.getBoundingClientRect().top - messages.getBoundingClientRect().top + messages.scrollTop
+  const below = messagesInner.getBoundingClientRect().bottom - group.getBoundingClientRect().bottom
+  // 视图里消息下方还要放得下「消息自身 + 后面的内容」
+  const needed = messages.clientHeight - MESSAGE_TOP_ANCHOR - group.offsetHeight - below
+  if (needed > 0) messagesTail.style.height = `${needed + TAIL_SLACK}px`
+
+  const target = Math.max(0, messageTop - MESSAGE_TOP_ANCHOR)
+
+  if (!animate) {
+    // 空态发出的第一条：窗口还在展开，直接落位即可
+    messages.scrollTop = target
+    return
+  }
+
+  // 新消息先出现在内容底部（视口最下方），下一帧再平滑滚到顶部
+  suppressScrollButtonDuringAnimation()
+  messages.scrollTop = Math.max(0, contentBottom() - messages.clientHeight)
+  requestAnimationFrame(() => {
+    messages.scrollTo({ top: target, behavior: 'smooth' })
+  })
+}
+
+/**
+ * 回答结束：尽量收回补位空间。
+ *
+ * 只收到「不会让当前视图被夹走」的程度 —— 如果回答很短、内容底部撑不满视口，
+ * 全部收回会让浏览器把 scrollTop 夹到新的最大值，用户刚顶到上面的消息会往下跳。
+ * 留刚好够的那一点点空白，视图就保持不动。
+ */
+function releaseTail(): void {
+  const keep = messages.scrollTop + messages.clientHeight - contentBottom()
+  messagesTail.style.height = `${Math.max(0, keep)}px`
 }
 
 function makeCopyButton(read: () => string): HTMLButtonElement {
@@ -230,7 +341,7 @@ function appendMessage(kind: 'user' | 'ai', text: string): HTMLElement {
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
 
   messagesInner.appendChild(group)
-  scrollToBottom()
+  updateScrollButton()
   return body
 }
 
@@ -244,7 +355,6 @@ function addThinking(): void {
   group.appendChild(box)
   messagesInner.appendChild(group)
   thinkingEl = group
-  scrollToBottom()
 }
 
 function removeThinking(): void {
@@ -254,6 +364,7 @@ function removeThinking(): void {
 
 function clearMessages(): void {
   messagesInner.replaceChildren()
+  messagesTail.style.height = '0px'
   streamingBody = null
   thinkingEl = null
   continueButton = null
@@ -312,7 +423,7 @@ function showContinueButton(): void {
   actions.appendChild(button)
   continueButton = button
   continueBody = body
-  scrollToBottom()
+  updateScrollButton()
 }
 
 // ── 形态切换 ──────────────────────────────────────────────────
@@ -337,6 +448,8 @@ function applyMode(next: QuickMode): void {
 
   autosize()
   syncSendState()
+  // 布局要等一帧才稳定（展开动画期间高度在变）
+  requestAnimationFrame(updateScrollButton)
 }
 
 function switchToContent(): void {
@@ -382,8 +495,14 @@ function submit(): void {
 
   // 先把反馈给到用户：切形态 + 画出自己那条气泡，然后再等回答
   switchToContent()
-  appendMessage('user', text)
+  const bubble = appendMessage('user', text)
   addThinking()
+
+  // 新消息顶到「顶栏下方 10px」，每次发消息都能从最上面开始看
+  const group = bubble.closest('.msg-group') as HTMLElement | null
+  // 第一条（空态→有内容态）不做滚动动画，直接落位
+  if (group) alignMessageToTop(group, !enteringContent)
+  updateScrollButton()
 
   busy = true
   input.value = ''
@@ -406,17 +525,20 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       } else {
         streamingBody = appendMessage('ai', event.text)
       }
-      scrollToBottom()
+      // 设计稿：生成过程中不自动滚动，只更新「滚动到底部」按钮
+      updateScrollButton()
       break
     }
 
     case 'answer-done': {
       removeThinking()
+      releaseTail()
       streamingBody = null
       busy = false
       stopping = false
       hideContinueButton()
       syncSendState()
+      updateScrollButton()
       // 回答结束，光标回到输入框
       focusInput()
       break
@@ -440,11 +562,13 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       }
 
       removeThinking()
+      releaseTail()
       streamingBody = null
       busy = false
       syncSendState()
       // DeepSeek 只有最新一条被截断的回答会给出「继续生成」
       if (event.canContinue) showContinueButton()
+      updateScrollButton()
       focusInput()
       break
     }
@@ -469,11 +593,13 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
 
     case 'error': {
       removeThinking()
+      releaseTail()
       streamingBody = null
       busy = false
       stopping = false
       appendMessage('ai', `${t('quick.error')}：${event.message}`)
       syncSendState()
+      updateScrollButton()
       break
     }
 
@@ -505,6 +631,33 @@ input.addEventListener('keydown', (event) => {
 
 deepThinkButton?.addEventListener('click', () => togglePressed(deepThinkButton))
 smartSearchButton?.addEventListener('click', () => togglePressed(smartSearchButton))
+
+// 滚动时更新「滚动到底部」按钮；内容/可视区尺寸变化时也要更新
+messages.addEventListener('scroll', updateScrollButton, { passive: true })
+messages.addEventListener(
+  'scrollend',
+  () => {
+    if (!suppressScrollButton) return
+    suppressScrollButton = false
+    if (suppressScrollTimer) {
+      window.clearTimeout(suppressScrollTimer)
+      suppressScrollTimer = undefined
+    }
+    updateScrollButton()
+  },
+  { passive: true },
+)
+const scrollObserver = new ResizeObserver(updateScrollButton)
+scrollObserver.observe(messages)
+scrollObserver.observe(messagesInner)
+
+scrollBottomButton.addEventListener('click', () => {
+  // 点下去立刻收起，不等滚到底部
+  suppressScrollButtonDuringAnimation()
+  // 只滚到内容底部，不滚进 messagesTail 补出来的空白
+  messages.scrollTo({ top: Math.max(0, contentBottom() - messages.clientHeight), behavior: 'smooth' })
+  focusInput()
+})
 sendButton.addEventListener('click', () => {
   if (!busy) {
     submit()
@@ -611,6 +764,7 @@ window.ds?.onQuickShown(() => {
   void loadMessages()
   app.classList.remove('content-enter')
   autosize()
+  updateScrollButton()
   input.focus()
 })
 

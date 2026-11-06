@@ -208,6 +208,10 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_NEWCHAT_TEST === '1') {
       void runNewChatSelfCheck(mainWindow, quickWindow)
     }
+
+    if (process.env.DS_SCROLL_TEST === '1') {
+      runScrollSelfCheck(quickWindow)
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -1157,4 +1161,109 @@ function runQuickWindowSelfCheck(quick: QuickWindow | null): void {
         }, 300)
       })
   }, 11200)
+}
+
+/** 临时自检：滚动到底部按钮的出现 / 点击 / 生成中不自动跟随 */
+function runScrollSelfCheck(quick: QuickWindow | null): void {
+  const run = (js: string): Promise<unknown> =>
+    quick ? quick.window.webContents.executeJavaScript(js) : Promise.resolve(null)
+
+  const state = `(() => {
+    const m = document.getElementById('messages')
+    const b = document.getElementById('scrollBottom')
+    return {
+      scrollTop: Math.round(m.scrollTop),
+      max: Math.round(m.scrollHeight - m.clientHeight),
+      shown: b.classList.contains('show'),
+      opacity: getComputedStyle(b).opacity,
+    }
+  })()`
+
+  setTimeout(() => quick?.show(), 1200)
+  setTimeout(() => quick?.setMode('content'), 2200)
+
+  // 注入一段长对话，滚到顶部
+  setTimeout(() => {
+    void run(`(() => {
+      const inner = document.getElementById('messagesInner')
+      const add = (tplId, text, kind) => {
+        const g = document.createElement('div')
+        g.className = 'msg-group'
+        g.appendChild(document.getElementById(tplId).content.cloneNode(true))
+        g.querySelector(kind === 'user' ? '.bubble' : '.body').textContent = text
+        inner.appendChild(g)
+      }
+      add('tplUser', '滚动测试', 'user')
+      add('tplAi', '这是一段很长的回答。'.repeat(80), 'ai')
+      document.getElementById('messages').scrollTop = 0
+    })()`)
+  }, 3000)
+
+  setTimeout(() => {
+    void run(state).then((r) => console.log('[滚动测试] 顶部:', JSON.stringify(r)))
+  }, 3500)
+
+  // 点「滚动到底部」
+  setTimeout(() => {
+    void run(`document.getElementById('scrollBottom').click()`)
+  }, 4000)
+  setTimeout(() => {
+    void run(state).then((r) => console.log('[滚动测试] 点击瞬间:', JSON.stringify(r)))
+  }, 4120)
+  setTimeout(() => {
+    void run(state).then((r) => console.log('[滚动测试] 点击后:', JSON.stringify(r)))
+  }, 5000)
+
+  // 已经在底部时追加文字：不应该自动滚动，按钮应该重新出现
+  setTimeout(() => {
+    void run(`(() => {
+      const bodies = document.querySelectorAll('.msg-ai .body')
+      const last = bodies[bodies.length - 1]
+      last.textContent += '\\n追加的内容。'.repeat(30)
+    })()`)
+  }, 5400)
+  setTimeout(() => {
+    void run(state).then((r) => console.log('[滚动测试] 追加后:', JSON.stringify(r)))
+  }, 6200)
+
+  // 再发一条消息：新消息应该被顶到「顶栏下方 10px」（临时数据目录，不会发到账号）
+  setTimeout(() => {
+    void run(`(() => {
+      const input = document.getElementById('input')
+      input.value = '第二条消息'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.getElementById('send').click()
+    })()`)
+  }, 6600)
+  const measure = `(() => {
+    const m = document.getElementById('messages')
+    const users = document.querySelectorAll('.msg-user')
+    const last = users[users.length - 1]
+    return {
+      userTop: Math.round(last.getBoundingClientRect().top - m.getBoundingClientRect().top),
+      scrollTop: Math.round(m.scrollTop),
+      tail: Math.round(document.getElementById('messagesTail').offsetHeight),
+      shown: document.getElementById('scrollBottom').classList.contains('show'),
+    }
+  })()`
+
+  // 动画过程采样：userTop 应该从视口下方一路减到 50
+  setTimeout(() => {
+    void run(measure).then((r) => console.log('[滚动测试] 动画中 1:', JSON.stringify(r)))
+  }, 6660)
+  setTimeout(() => {
+    void run(measure).then((r) => console.log('[滚动测试] 动画中 2:', JSON.stringify(r)))
+  }, 6780)
+
+  setTimeout(() => {
+    void run(measure).then((r) => console.log('[滚动测试] 新消息:', JSON.stringify(r)))
+  }, 6950)
+
+  // 模拟回答结束：补位只收到不夹走视图的程度，消息应该还在 50px
+  setTimeout(() => quick?.sendEvent({ type: 'answer-done' }), 7150)
+  setTimeout(() => {
+    void run(measure).then((r) => console.log('[滚动测试] 结束后:', JSON.stringify(r)))
+  }, 7400)
+
+  setTimeout(() => process.exit(0), 8000)
 }
