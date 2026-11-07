@@ -1,7 +1,22 @@
 import type { Language, ResolvedLanguage } from './i18n'
 
+/** 主题：跟随系统 / 浅色 / 深色 */
+export type ThemeSetting = 'system' | 'light' | 'dark'
+
 /** 快捷窗口的两种形态（设计稿：快捷窗口-无内容 / 快捷窗口-有内容） */
 export type QuickMode = 'empty' | 'content'
+
+/** 历史对话列表里的一条 */
+export interface HistoryEntry {
+  id: string
+  title: string
+}
+
+/** 历史对话里的消息（快速窗口只显示纯文本） */
+export interface HistoryMessage {
+  role: 'user' | 'ai'
+  text: string
+}
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
 export type QuickEvent =
@@ -25,6 +40,14 @@ export type QuickEvent =
   | { type: 'conversation-cleared' }
   /** 出错，界面应把消息撤掉并提示 */
   | { type: 'error'; message: string }
+  /** 历史弹框的展开/收起（主进程可能同时改了窗口尺寸） */
+  | { type: 'history-panel'; open: boolean }
+  /** 历史列表（第一次打开 append=false，滚动加载 append=true） */
+  | { type: 'history-list'; items: HistoryEntry[]; append: boolean; hasMore: boolean }
+  /** 正在从 DeepSeek 页面加载选中的历史对话 */
+  | { type: 'history-start' }
+  /** 历史对话加载完成 */
+  | { type: 'history-loaded'; messages: HistoryMessage[] }
 
 export interface QuickSubmitPayload {
   text: string
@@ -53,6 +76,8 @@ export interface SettingsSnapshot {
   messages: Record<string, string>
   language: ResolvedLanguage
   languageSetting: Language
+  /** 主题设置：system / light / dark */
+  theme: ThemeSetting
   /** Electron accelerator，例如 'Alt+Space' */
   hotkey: string
   hotkeyDisplay: string
@@ -78,6 +103,7 @@ export interface DsApi {
   setHotkey: (accelerator: string) => Promise<HotkeyUpdateResult>
   setResetAfter: (minutes: number) => Promise<void>
   setLanguage: (language: Language) => Promise<void>
+  setTheme: (theme: ThemeSetting) => Promise<void>
   logout: () => Promise<void>
 
   // ── 快捷窗口 ──────────────────────────────────────────────
@@ -98,6 +124,15 @@ export interface DsApi {
 
   /** 继续生成：点掉 DeepSeek 页面上的「继续生成」按钮 */
   continueQuickGeneration: () => void
+
+  /** 打开 / 收起历史对话弹框 */
+  toggleQuickHistory: (open: boolean) => void
+
+  /** 历史列表滚到底部时，让主进程再去页面里滚一屏 */
+  loadMoreQuickHistory: () => void
+
+  /** 选了某条历史对话 */
+  selectQuickHistory: (id: string) => void
 
   /** 切换窗口形态：空态 ↔ 有内容 */
   setQuickMode: (mode: QuickMode) => void

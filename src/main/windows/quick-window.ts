@@ -32,6 +32,9 @@ const FRAME_MS = 16
 /** 用户手动缩放后，隔一小会儿再落盘 */
 const SIZE_SAVE_DELAY = 400
 
+/** 空态打开历史弹框时，窗口向上让出的高度（输入框 100 + 气泡主体 166 + 尾巴和间隙） */
+const HISTORY_WINDOW_HEIGHT = 230
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
@@ -57,6 +60,9 @@ export class QuickWindow {
   private currentHeight = QUICK_WINDOW_MIN_HEIGHT
   private visible = false
   private mode: QuickMode = 'empty'
+  /** 空态打开了历史弹框：窗口临时向上让出空间 */
+  private historyOpen = false
+  private historyRestoreHeight = QUICK_WINDOW_MIN_HEIGHT
 
   /** 有内容态的尺寸，跨隐藏/重启保留 */
   private contentSize = {
@@ -268,6 +274,20 @@ export class QuickWindow {
       this.sendEvent({ type: 'transition-done' })
     }
 
+    // 历史弹框开着时被收起：先把临时撑高的窗口还原，否则下次唤出还是高的
+    if (this.historyOpen) {
+      this.historyOpen = false
+      this.window.setHasShadow(true)
+      const b = this.window.getBounds()
+      this.window.setBounds({
+        x: b.x,
+        y: b.y + b.height - this.historyRestoreHeight,
+        width: QUICK_WINDOW_WIDTH,
+        height: this.historyRestoreHeight,
+      })
+      this.sendEvent({ type: 'history-panel', open: false })
+    }
+
     // 位置可能已经变了，下次展开重新记录反向动画的落点
     this.preExpandBottom = null
 
@@ -289,7 +309,8 @@ export class QuickWindow {
 
   /** 空态下输入折行时向上长高，夹在 100–200 之间 */
   applyHeight(height: number): void {
-    if (this.mode !== 'empty') return
+    // 历史弹框开着的时候窗口是临时撑高的，别让输入框的自动高度把它收回去
+    if (this.mode !== 'empty' || this.historyOpen) return
 
     const next = clamp(Math.round(height), QUICK_WINDOW_MIN_HEIGHT, QUICK_WINDOW_MAX_HEIGHT)
     if (next === this.currentHeight) return
@@ -301,6 +322,55 @@ export class QuickWindow {
       width: QUICK_WINDOW_WIDTH,
       height: next,
     })
+  }
+
+  /**
+   * 打开 / 收起历史弹框。
+   *
+   * 空态只有 400×100，放不下列表，所以窗口临时向上让出空间（底边不动）。
+   * 有内容态本来就是 420×500，直接浮在消息区上，不动窗口。
+   */
+  openHistoryPanel(): void {
+    if (this.mode === 'empty' && !this.historyOpen) {
+      this.historyOpen = true
+      this.historyRestoreHeight = this.currentHeight
+
+      const bounds = this.window.getBounds()
+      const bottom = bounds.y + bounds.height
+      const area = screen.getDisplayNearestPoint({
+        x: Math.round(bounds.x + bounds.width / 2),
+        y: Math.round(bounds.y + bounds.height / 2),
+      }).workArea
+      const maxHeight = bottom - area.y - EDGE_MARGIN
+      const height = clamp(HISTORY_WINDOW_HEIGHT, QUICK_WINDOW_MIN_HEIGHT + 10, Math.max(QUICK_WINDOW_MIN_HEIGHT, maxHeight))
+
+      // 关掉系统窗口阴影：撑高后窗口是一块很大的透明矩形，
+      // 系统阴影会在弹框外侧留下一圈灰边（透明区域也有阴影轮廓）。
+      this.window.setHasShadow(false)
+
+      this.window.setBounds({
+        x: bounds.x,
+        y: bottom - height,
+        width: bounds.width,
+        height,
+      })
+    }
+    this.sendEvent({ type: 'history-panel', open: true })
+  }
+
+  closeHistoryPanel(): void {
+    if (this.historyOpen && this.mode === 'empty') {
+      this.historyOpen = false
+      this.window.setHasShadow(true)
+      const bounds = this.window.getBounds()
+      this.window.setBounds({
+        x: bounds.x,
+        y: bounds.y + bounds.height - this.historyRestoreHeight,
+        width: QUICK_WINDOW_WIDTH,
+        height: this.historyRestoreHeight,
+      })
+    }
+    this.sendEvent({ type: 'history-panel', open: false })
   }
 
   // ── 手动拖动窗口 ──────────────────────────────────────────
@@ -334,6 +404,13 @@ export class QuickWindow {
 
     const previous = this.mode
     this.mode = mode
+
+    // 切形态时历史弹框不能留着：空态撑高的窗口要交还给新的布局
+    if (this.historyOpen) {
+      this.historyOpen = false
+      this.window.setHasShadow(true)
+      this.sendEvent({ type: 'history-panel', open: false })
+    }
 
     if (mode === 'content') {
       const target = this.contentBoundsFromCurrent()

@@ -45,6 +45,10 @@
   --scroll-border: #e6e6e6;
   --scroll-fg: #151721;
 
+  /* 历史对话弹框 */
+  --history-bg: #ffffff;
+  --history-border: #e6e6e6;
+
   --user-bubble: #133463;
   --user-bubble-fg: #ffffff;
 
@@ -84,6 +88,9 @@
     --scroll-border: #797979;
     --scroll-fg: #ffffff;
 
+    --history-bg: #1b1b1f;
+    --history-border: #3a3a3d;
+
     --topbar-bg: #232328;
     --topbar-fg: #ababab;
 
@@ -108,7 +115,8 @@ body {
 }
 
 body {
-  font-family: -apple-system, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  /* 项目统一用系统字体：苹方（PingFang SC） */
+  font-family: 'PingFang SC', -apple-system, 'Helvetica Neue', sans-serif;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
@@ -131,9 +139,14 @@ body {
   transition: background-color 0.26s ease, border-radius 0.26s ease;
 }
 
+/*
+ * 空态：窗口本身透明，输入框自己画成 400×100 的圆角面板。
+ * 这样打开历史弹框、窗口临时向上撑高时，上半部分天然透明，
+ * 不需要再切换底色（也避免后台窗口里 CSS 过渡被节流、卡在中间状态）。
+ */
 .app[data-mode='empty'] {
-  background: var(--frame-empty);
-  border-color: var(--empty-border);
+  background: transparent;
+  border: 0;
   border-radius: 20px;
 }
 
@@ -385,10 +398,12 @@ body {
   transition: opacity 0.22s ease;
 }
 
-/* 空态：整个窗口就是输入框，描边和圆角由 .app 负责 */
+/* 空态：整个窗口就是输入框，描边和圆角由输入框自己画 */
 .app[data-mode='empty'] .composer {
   flex: 1;
-  background: transparent;
+  border: 1px solid var(--empty-border);
+  border-radius: 20px;
+  background: var(--frame-empty);
 }
 
 /* 有内容态：输入框是浮在外框里的圆角块，四周各留 10px */
@@ -399,6 +414,130 @@ body {
   border: 1px solid var(--composer-border);
   border-radius: 20px;
   background: var(--composer-bg);
+}
+
+/*
+ * 空态打开历史弹框：窗口临时向上让出空间。
+ * 此时外框整体透明，输入框自己画成一块 400×100 的圆角面板，
+ * 历史弹框浮在它上方 —— 和设计稿「输入框 + 上方弹框」的效果一致。
+ */
+.app[data-mode='empty'].history-open .composer {
+  flex: none;
+  height: 100px;
+  margin-top: auto;
+}
+
+/* ── 历史对话弹框 ─────────────────────────────────────────── */
+
+.history-panel {
+  position: absolute;
+  left: 10px;
+  /* 具体位置由 main.ts 根据「历史」按钮计算，这里给个兜底 */
+  bottom: 53px;
+  z-index: 9;
+
+  width: 206px;
+  max-height: 166px;
+  display: flex;
+  flex-direction: column;
+
+  border: 1px solid var(--history-border);
+  border-radius: 10px;
+  background: var(--history-bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+/*
+ * 指向「历史」胶囊的小尾巴。
+ * 用两个纯三角形拼出 1px 描边：外层是描边色，内层是气泡底色。
+ * 底边与气泡底边齐平，不会伸进内容区遮挡文字。
+ */
+.history-panel::before,
+.history-panel::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.history-panel::before {
+  left: calc(var(--tail-x, 96px) - 1px);
+  border-width: 13px 8px 0 8px;
+  border-top-color: var(--history-border);
+}
+
+.history-panel::after {
+  left: var(--tail-x, 96px);
+  border-width: 12px 7px 0 7px;
+  border-top-color: var(--history-bg);
+}
+
+.history-panel[hidden] {
+  display: none;
+}
+
+.history-panel.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.history-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 9px;
+}
+
+/* 等数据回来之前先撑住高度，避免弹框先缩成一条再长开 */
+.history-panel.loading .history-list {
+  min-height: 120px;
+}
+
+.history-item {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 30px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: var(--hover-bg);
+}
+
+.history-empty {
+  display: none;
+  padding: 24px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--placeholder);
+}
+
+.history-panel.empty .history-list {
+  display: none;
+}
+
+.history-panel.empty .history-empty {
+  display: block;
 }
 
 /* 展开动画进行中：只显示外框，内容等动画结束再淡入 */
@@ -567,12 +706,14 @@ body {
 /* ── 滚动条：macOS overlay 风格 ─────────────────────────── */
 
 .messages::-webkit-scrollbar,
-.input::-webkit-scrollbar {
+.input::-webkit-scrollbar,
+.history-list::-webkit-scrollbar {
   width: 8px;
 }
 
 .messages::-webkit-scrollbar-thumb,
-.input::-webkit-scrollbar-thumb {
+.input::-webkit-scrollbar-thumb,
+.history-list::-webkit-scrollbar-thumb {
   background: var(--scrollbar);
   border-radius: 4px;
   border: 2px solid transparent;
@@ -580,6 +721,7 @@ body {
 }
 
 .messages::-webkit-scrollbar-track,
-.input::-webkit-scrollbar-track {
+.input::-webkit-scrollbar-track,
+.history-list::-webkit-scrollbar-track {
   background: transparent;
 }

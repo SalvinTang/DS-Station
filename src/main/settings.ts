@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { allMessages, resolveLanguage, type Language, type ResolvedLanguage } from '../shared/i18n'
+import type { ThemeSetting } from '../shared/types'
 
 /**
  * 本地配置。产品说明书 §10：只保存应用自身的配置，
@@ -38,6 +39,8 @@ export interface Settings {
   window: WindowState
   quickWindow: QuickWindowSettings
   language: Language
+  /** 应用主题：跟随系统 / 浅色 / 深色 */
+  theme: ThemeSetting
   /**
    * 上一次确认过的登录状态。
    *
@@ -63,6 +66,7 @@ const DEFAULTS: Settings = {
     contentHeight: 500,
   },
   language: 'system',
+  theme: 'system',
   login: { knownLoggedIn: false },
 }
 

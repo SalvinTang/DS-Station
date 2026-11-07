@@ -56,6 +56,12 @@
         <div class="messages-tail" id="messagesTail" aria-hidden="true"></div>
       </div>
 
+      <!-- ── 历史对话弹框：浮在输入框上方 ── -->
+      <div class="history-panel" id="historyPanel" hidden>
+        <div class="history-list" id="historyList"></div>
+        <div class="history-empty" id="historyEmpty">无历史对话</div>
+      </div>
+
       <!-- ── 输入区：空态时它就是整个外框 ── -->
       <div class="composer">
         <textarea
@@ -119,6 +125,18 @@
               />
             </svg>
             <span id="smartSearchLabel" class="tool-label">搜索</span>
+          </button>
+
+          <button id="history" class="tool-btn" type="button" aria-pressed="false"
+                  title="历史" aria-label="历史">
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+              <circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.4" />
+              <path
+                d="M8 4.6V8l2.6 1.6"
+                stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"
+              />
+            </svg>
+            <span id="historyLabel" class="tool-label">历史</span>
           </button>
 
           <div class="spacer"></div>

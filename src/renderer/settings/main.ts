@@ -6,6 +6,7 @@
  */
 
 import type { Language } from '../../shared/i18n'
+import type { ThemeSetting } from '../../shared/types'
 
 let messages: Record<string, string> = {}
 
@@ -25,13 +26,13 @@ const titleEl = el('title')
 const lbHotkey = el('lbHotkey')
 const lbReset = el('lbReset')
 const lbLanguage = el('lbLanguage')
+const lbTheme = el('lbTheme')
 const lbVersion = el('lbVersion')
 
 const hotkeyButton = el<HTMLButtonElement>('hotkey')
-const hintHotkey = el('hintHotkey')
-const hintReset = el('hintReset')
 const resetSelect = el<HTMLSelectElement>('resetAfter')
 const languageSelect = el<HTMLSelectElement>('language')
+const themeSelect = el<HTMLSelectElement>('theme')
 const versionEl = el('version')
 const statusEl = el('status')
 
@@ -171,6 +172,10 @@ languageSelect.addEventListener('change', () => {
   void window.ds?.setLanguage(languageSelect.value as Language)
 })
 
+themeSelect.addEventListener('change', () => {
+  void window.ds?.setTheme(themeSelect.value as ThemeSetting)
+})
+
 // ── 退出登录 ──────────────────────────────────────────────────
 
 logoutButton.addEventListener('click', () => {
@@ -201,9 +206,8 @@ async function init(): Promise<void> {
   lbHotkey.textContent = t('settings.hotkey')
   lbReset.textContent = t('settings.resetAfter')
   lbLanguage.textContent = t('settings.language')
+  lbTheme.textContent = t('settings.theme')
   lbVersion.textContent = t('settings.version')
-  hintHotkey.textContent = t('settings.hotkeyHint')
-  hintReset.textContent = t('settings.resetHint')
   logoutButton.textContent = t('settings.logout')
   confirmTitle.textContent = t('settings.logoutConfirm')
   confirmDetail.textContent = t('settings.logoutDetail')
@@ -237,6 +241,21 @@ async function init(): Promise<void> {
     }),
   )
   languageSelect.value = snapshot.languageSetting
+
+  const themes: { value: ThemeSetting; label: string }[] = [
+    { value: 'system', label: t('theme.system') },
+    { value: 'light', label: t('theme.light') },
+    { value: 'dark', label: t('theme.dark') },
+  ]
+  themeSelect.replaceChildren(
+    ...themes.map(({ value, label }) => {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = label
+      return option
+    }),
+  )
+  themeSelect.value = snapshot.theme
 
   versionEl.textContent = snapshot.version
 }

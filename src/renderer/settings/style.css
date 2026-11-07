@@ -1,14 +1,23 @@
+/*
+ * 设置窗口。
+ * 尺寸/布局取自 Design/设计稿/设置页调整.html：360×460，
+ * 顶部 40px 可拖动标题栏，内容左右留 17px，控件统一 100×26。
+ */
+
 :root {
   color-scheme: light dark;
 
-  --bg: #f6f6f6;
+  --bg: #ffffff;
+  --titlebar: #f2f2f2;
   --fg: #1b1b1f;
-  --muted: #7c7e88;
-  --line: rgba(0, 0, 0, 0.1);
-  --card: rgba(255, 255, 255, 0.72);
+  --label: #555555;
+  --value: #1b1b1f;
+  --muted: #8b8d98;
+  --line: rgba(0, 0, 0, 0.12);
   --field: #ffffff;
-  --field-line: rgba(0, 0, 0, 0.16);
-  --accent: #4d6bfe;
+  --field-line: #797979;
+  --hover: #f5f5f5;
+  --accent: #3964fe;
   --danger: #d93a2b;
   --danger-fg: #ffffff;
   --ok: #1a9e4b;
@@ -17,12 +26,15 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #1b1c20;
+    --titlebar: #232328;
     --fg: #e9eaef;
+    --label: #ababab;
+    --value: #e9eaef;
     --muted: #8b8d98;
-    --line: rgba(255, 255, 255, 0.11);
-    --card: rgba(255, 255, 255, 0.05);
+    --line: rgba(255, 255, 255, 0.12);
     --field: #2a2b31;
-    --field-line: rgba(255, 255, 255, 0.18);
+    --field-line: #6c6c72;
+    --hover: rgba(255, 255, 255, 0.06);
     --danger: #ff5f52;
     --ok: #4cd07d;
   }
@@ -40,29 +52,45 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
-  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  /* 项目统一系统字体：苹方 */
+  font-family: 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  font-size: 14px;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
 
+/* ── 可拖动标题栏 ───────────────────────────────────────── */
+
+.titlebar {
+  flex: none;
+  height: 40px;
+  background: var(--titlebar);
+  border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+
+/* ── 内容 ───────────────────────────────────────────────── */
+
 .page {
-  height: 100%;
-  padding: 46px 26px 22px;
+  flex: 1;
+  min-height: 0;
+  padding: 10px 17px 16px;
   display: flex;
   flex-direction: column;
 }
 
 h1 {
-  font-size: 19px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: 0.2px;
-  margin-bottom: 22px;
+  margin-bottom: 8px;
 }
-
-/* ── 设置项 ─────────────────────────────────────────────── */
 
 .rows {
   display: flex;
@@ -73,70 +101,67 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 34px;
-  padding: 5px 0;
+  gap: 12px;
+  height: 36px;
 }
 
 .label {
-  color: var(--fg);
+  color: var(--label);
+  font-size: 14px;
 }
 
 .value {
-  color: var(--muted);
+  width: 100px;
+  color: var(--value);
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
+  text-align: left;
 }
 
-.hint {
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.55;
-  margin: 2px 0 12px;
-  max-width: 95%;
-}
+/* ── 控件（统一 100×26，优先用原生 select / button）────── */
 
-/* ── 控件 ───────────────────────────────────────────────── */
+.keycap,
+.select {
+  width: 100px;
+  height: 26px;
+  padding: 0 8px;
 
-.keycap {
   font: inherit;
-  font-weight: 600;
-  min-width: 118px;
-  padding: 6px 12px;
-
+  font-size: 14px;
   color: var(--fg);
   background: var(--field);
   border: 1px solid var(--field-line);
-  border-bottom-width: 2px;
-  border-radius: 8px;
-  cursor: pointer;
+  border-radius: 6px;
+}
 
+.keycap {
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .keycap:hover {
-  border-color: var(--accent);
+  background: var(--hover);
 }
 
 .keycap.recording {
   color: var(--accent);
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 10%, var(--field));
 }
 
 .select {
-  font: inherit;
-  min-width: 118px;
-  padding: 6px 10px;
-
-  color: var(--fg);
-  background: var(--field);
-  border: 1px solid var(--field-line);
-  border-radius: 8px;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 22px;
   cursor: pointer;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23797582' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
 }
 
-.select:focus-visible,
 .keycap:focus-visible,
+.select:focus-visible,
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -146,9 +171,9 @@ button:focus-visible {
 
 .status {
   min-height: 18px;
+  margin-top: 10px;
   font-size: 12px;
   color: var(--muted);
-  margin-top: 6px;
 }
 
 .status.ok {
@@ -163,40 +188,25 @@ button:focus-visible {
 
 .footer {
   margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: center;
 }
 
-button.danger,
-button.ghost {
+.logout {
+  width: 120px;
+  height: 36px;
   font: inherit;
-  width: 100%;
-  padding: 8px 14px;
-  border-radius: 9px;
-  cursor: pointer;
-  border: 1px solid transparent;
-  transition: filter 0.15s ease, background 0.15s ease;
-}
-
-button.danger {
-  color: var(--danger-fg);
-  background: var(--danger);
-}
-
-button.danger:hover {
-  filter: brightness(1.07);
-}
-
-button.ghost {
+  font-size: 14px;
   color: var(--fg);
-  background: transparent;
-  border-color: var(--field-line);
-  width: auto;
-  min-width: 88px;
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
 }
 
-button.ghost:hover {
-  background: var(--card);
+.logout:hover {
+  background: var(--hover);
 }
 
 /* ── 确认弹层 ───────────────────────────────────────────── */
@@ -215,7 +225,7 @@ button.ghost:hover {
 }
 
 .sheet {
-  width: 320px;
+  width: 300px;
   padding: 20px;
   border-radius: 14px;
 
@@ -243,7 +253,32 @@ button.ghost:hover {
   gap: 10px;
 }
 
-.sheet-actions button.danger {
-  width: auto;
-  min-width: 96px;
+button.danger,
+button.ghost {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.15s ease, background 0.15s ease;
+}
+
+button.danger {
+  color: var(--danger-fg);
+  background: var(--danger);
+}
+
+button.danger:hover {
+  filter: brightness(1.07);
+}
+
+button.ghost {
+  color: var(--fg);
+  background: transparent;
+  border-color: var(--field-line);
+}
+
+button.ghost:hover {
+  background: var(--hover);
 }

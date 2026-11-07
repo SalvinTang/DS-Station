@@ -6,7 +6,12 @@
  * 然后等它把 answer-start / answer-update / answer-done 推回来。
  */
 
-import type { QuickEvent, QuickMode, QuickSubmitPayload } from '../../shared/types'
+import type {
+  HistoryEntry,
+  QuickEvent,
+  QuickMode,
+  QuickSubmitPayload,
+} from '../../shared/types'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
@@ -77,10 +82,13 @@ function applyMessages(): void {
   // 胶囊里显示的是短标签，完整名称留在 title / aria-label
   if (deepThinkLabel) deepThinkLabel.textContent = t('quick.deepThinkShort')
   if (smartSearchLabel) smartSearchLabel.textContent = t('quick.smartSearchShort')
+  if (historyLabel) historyLabel.textContent = t('quick.history')
+  if (historyEmpty) historyEmpty.textContent = t('quick.noHistory')
 
   const labelled: [Element | null, string][] = [
     [deepThinkButton, 'quick.deepThink'],
     [smartSearchButton, 'quick.smartSearch'],
+    [historyButton, 'quick.history'],
     [sendButton, 'quick.send'],
     [scrollBottomButton, 'quick.scrollBottom'],
     [tbClose, 'quick.close'],
@@ -116,11 +124,27 @@ const smartSearchLabel = document.getElementById('smartSearchLabel')
 const sendButton = document.getElementById('send') as HTMLButtonElement
 const scrollBottomButton = document.getElementById('scrollBottom') as HTMLButtonElement
 
+const historyButton = document.getElementById('history') as HTMLButtonElement
+const historyLabel = document.getElementById('historyLabel')
+const historyPanel = document.getElementById('historyPanel') as HTMLElement
+const historyList = document.getElementById('historyList') as HTMLElement
+const historyEmpty = document.getElementById('historyEmpty') as HTMLElement
+
 const tbClose = document.getElementById('tbClose')
 const tbNewChat = document.getElementById('tbNewChat')
 const tbExpand = document.getElementById('tbExpand')
 
 let mode: QuickMode = 'empty'
+/** 历史弹框是否展开 */
+let historyOpen = false
+/** 历史列表还能不能继续加载 */
+let historyHasMore = false
+/** 已经请求过「加载更多」，等主进程回话 */
+let historyLoadPending = false
+/** 正在等主进程把选中的历史对话读回来（这期间不让发送） */
+let historyLoading = false
+/** 已经渲染过的历史条目，用来去重 */
+const historySeen = new Set<string>()
 /** 拖动窗口：按下时的鼠标屏幕坐标 */
 let dragOrigin: { x: number; y: number } | null = null
 /** 正在等回答：这期间发送按钮变成「停止生成」 */
@@ -153,6 +177,8 @@ function autosize(): void {
     )
     window.ds?.resizeQuickWindow(windowHeight)
   }
+
+  if (historyOpen) placeHistoryPanel()
 }
 
 /** 当前发送按钮是不是「停止」形态，避免每次输入都重写 innerHTML */
@@ -169,8 +195,8 @@ function syncSendState(): void {
   sendButton.setAttribute('aria-label', t(key))
 
   // 生成中：发送按钮就是停止按钮，始终可点
-  // 空闲时：没有内容就禁用
-  sendButton.disabled = !busy && input.value.trim().length === 0
+  // 空闲时：没有内容、或正在加载历史对话就禁用
+  sendButton.disabled = historyLoading || (!busy && input.value.trim().length === 0)
 }
 
 /**
@@ -190,6 +216,120 @@ function isPressed(element: Element | null): boolean {
 
 function togglePressed(element: Element | null): void {
   element?.setAttribute('aria-pressed', String(!isPressed(element)))
+}
+
+// ── 历史对话弹框 ─────────────────────────────────────────────
+
+/** 把弹框贴到输入框正上方（输入框高度变化时也要重新算） */
+function placeHistoryPanel(): void {
+  const appRect = app.getBoundingClientRect()
+  const buttonRect = historyButton.getBoundingClientRect()
+  const width = 206
+  const center = buttonRect.left + buttonRect.width / 2
+
+  // 设计稿：气泡贴在「历史」按钮正上方，尾巴指向按钮
+  const left = Math.min(
+    Math.max(center - appRect.left - width / 2, 4),
+    appRect.width - width - 4,
+  )
+  historyPanel.style.left = `${Math.round(left)}px`
+  // 尾巴尖离气泡底边约 12px，正好落在胶囊上沿
+  historyPanel.style.bottom = `${Math.round(appRect.bottom - buttonRect.top + 12)}px`
+
+  const tail = Math.min(Math.max(center - appRect.left - left - 7, 10), width - 22)
+  historyPanel.style.setProperty('--tail-x', `${Math.round(tail)}px`)
+
+  // 有内容态可能被用户缩得很矮：气泡不能顶出窗口
+  const available = buttonRect.top - appRect.top - 20
+  historyPanel.style.maxHeight = `${Math.round(Math.max(120, Math.min(166, available)))}px`
+}
+
+function clearHistoryItems(): void {
+  historyList.replaceChildren()
+  historyList.scrollTop = 0
+  historySeen.clear()
+  historyHasMore = false
+  historyLoadPending = false
+  historyPanel.classList.remove('empty')
+  historyPanel.classList.add('loading')
+}
+
+/**
+ * 只改界面，不通知主进程。
+ * 主进程推来的 history-panel 也走这里，避免两边来回调用。
+ */
+function applyHistoryPanel(open: boolean): void {
+  if (open === historyOpen) {
+    if (open) placeHistoryPanel()
+    return
+  }
+
+  historyOpen = open
+  historyButton.setAttribute('aria-pressed', String(open))
+  app.classList.toggle('history-open', open)
+
+  if (open) {
+    clearHistoryItems()
+    historyPanel.hidden = false
+    placeHistoryPanel()
+    requestAnimationFrame(() => {
+      placeHistoryPanel()
+      historyPanel.classList.add('open')
+    })
+    return
+  }
+
+  historyPanel.classList.remove('open')
+  historyLoadPending = false
+  historyList.replaceChildren()
+  historySeen.clear()
+  historyHasMore = false
+  // 等淡出动画结束再真正藏起来；期间又打开就别藏
+  window.setTimeout(() => {
+    if (!historyOpen) historyPanel.hidden = true
+  }, 160)
+}
+
+function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
+  if (!append) {
+    historyList.replaceChildren()
+    historyList.scrollTop = 0
+    historySeen.clear()
+  }
+
+  for (const item of items) {
+    if (historySeen.has(item.id)) continue
+    historySeen.add(item.id)
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'history-item'
+    button.textContent = item.title
+    // 条目本身已经被 CSS 截断，悬停时给出完整标题
+    button.title = item.title
+    button.addEventListener('click', () => {
+      applyHistoryPanel(false)
+      window.ds?.selectQuickHistory(item.id)
+    })
+    historyList.appendChild(button)
+  }
+
+  historyPanel.classList.remove('loading')
+  historyPanel.classList.toggle('empty', historyList.children.length === 0)
+  placeHistoryPanel()
+}
+
+/** 点「历史」胶囊：先给反馈，再让主进程去页面里读 */
+function requestHistoryToggle(): void {
+  if (historyOpen) {
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+    return
+  }
+  if (busy || stopping || historyLoading) return
+
+  applyHistoryPanel(true)
+  window.ds?.toggleQuickHistory(true)
 }
 
 // ── 消息渲染 ──────────────────────────────────────────────────
@@ -434,11 +574,13 @@ function showContinueButton(): void {
  */
 function applyMode(next: QuickMode): void {
   if (mode === next) return
+  if (historyOpen) applyHistoryPanel(false)
   mode = next
   app.dataset.mode = next
 
   if (next === 'empty') {
     busy = false
+    historyLoading = false
     clearMessages()
     topbar.classList.remove('show')
     app.classList.remove('content-enter')
@@ -467,10 +609,14 @@ function resetToEmpty(): void {
 function submit(): void {
   const text = input.value.trim()
   // stopping：已经点了停止，等主进程确认前不要发下一条
-  if (!text || busy || stopping) return
+  if (!text || busy || stopping || historyLoading) return
 
   // 发了新消息，上一条被截断的回答就不能再继续了
   hideContinueButton()
+  if (historyOpen) {
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+  }
 
   /*
    * 空态 → 有内容态：主进程会把窗口下移再向上长高。
@@ -595,11 +741,67 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       removeThinking()
       releaseTail()
       streamingBody = null
+      historyLoading = false
       busy = false
       stopping = false
       appendMessage('ai', `${t('quick.error')}：${event.message}`)
       syncSendState()
       updateScrollButton()
+      break
+    }
+
+    case 'history-panel': {
+      applyHistoryPanel(event.open)
+      break
+    }
+
+    case 'history-list': {
+      if (!historyOpen) break
+      renderHistoryItems(event.items, event.append)
+      historyHasMore = event.hasMore
+      historyLoadPending = false
+      break
+    }
+
+    case 'history-start': {
+      applyHistoryPanel(false)
+      clearMessages()
+      addThinking()
+      historyLoading = true
+      busy = false
+      stopping = false
+      syncSendState()
+      break
+    }
+
+    case 'history-loaded': {
+      removeThinking()
+      clearMessages()
+      for (const message of event.messages) {
+        appendMessage(message.role === 'user' ? 'user' : 'ai', message.text)
+      }
+      historyLoading = false
+      busy = false
+      stopping = false
+      syncSendState()
+
+      /*
+       * 进入历史对话后的落点：最后一条用户消息的气泡顶端对齐到
+       * 「顶栏下方 10px」—— 和空态发第一条消息时的位置一致。
+       * 这样能先看清自己最后问了什么，再往下看回答。
+       */
+      requestAnimationFrame(() => {
+        const users = messagesInner.querySelectorAll('.msg-user')
+        const lastUser = users[users.length - 1] as HTMLElement | undefined
+        const group = lastUser?.closest('.msg-group') as HTMLElement | null
+        if (mode === 'content' && group) {
+          alignMessageToTop(group, false)
+        } else {
+          messages.scrollTop = messages.scrollHeight
+        }
+        updateScrollButton()
+        focusInput()
+      })
       break
     }
 
@@ -631,6 +833,29 @@ input.addEventListener('keydown', (event) => {
 
 deepThinkButton?.addEventListener('click', () => togglePressed(deepThinkButton))
 smartSearchButton?.addEventListener('click', () => togglePressed(smartSearchButton))
+historyButton?.addEventListener('click', () => requestHistoryToggle())
+
+// 历史列表滚到接近底部：按需再向页面要一屏（不显示 loading）
+historyList.addEventListener('scroll', () => {
+  if (!historyOpen || !historyHasMore || historyLoadPending) return
+  const remaining = historyList.scrollHeight - historyList.scrollTop - historyList.clientHeight
+  if (remaining > 80) return
+  historyLoadPending = true
+  window.ds?.loadMoreQuickHistory()
+})
+
+// 点弹框外面（包括输入框、消息区、其它按钮）就收起
+app.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!historyOpen) return
+    const target = event.target as Node | null
+    if (target && (historyPanel.contains(target) || historyButton.contains(target))) return
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+  },
+  true,
+)
 
 // 滚动时更新「滚动到底部」按钮；内容/可视区尺寸变化时也要更新
 messages.addEventListener('scroll', updateScrollButton, { passive: true })
@@ -680,6 +905,11 @@ sendButton.addEventListener('click', () => {
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault()
+    if (historyOpen) {
+      applyHistoryPanel(false)
+      window.ds?.toggleQuickHistory(false)
+      return
+    }
     window.ds?.hideQuickWindow()
   }
 })
@@ -724,8 +954,10 @@ tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
  */
 app.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return
+  // 历史弹框开着时，点哪都只是「关弹框」，不要顺手把窗口拖走
+  if (historyOpen) return
   const target = event.target as HTMLElement | null
-  if (target?.closest('button, textarea, input, select, a, .messages')) return
+  if (target?.closest('button, textarea, input, select, a, .messages, .history-panel')) return
 
   dragOrigin = { x: event.screenX, y: event.screenY }
   try {
@@ -763,6 +995,8 @@ window.ds?.onQuickShown(() => {
   // 顺手重拉一次文案 —— 用户可能刚在设置里换了语言
   void loadMessages()
   app.classList.remove('content-enter')
+  // 设计稿：隐藏后重新唤起，历史弹框默认收起
+  applyHistoryPanel(false)
   autosize()
   updateScrollButton()
   input.focus()
@@ -770,6 +1004,11 @@ window.ds?.onQuickShown(() => {
 
 // 焦点一回到窗口，光标就落在输入框里（从别的 App 切回来、重新唤出都算）
 window.addEventListener('focus', focusInput)
+
+// 窗口尺寸变化（空态展开历史、用户缩放有内容态）后重新贴一下弹框
+window.addEventListener('resize', () => {
+  if (historyOpen) placeHistoryPanel()
+})
 
 /*
  * 点工具栏按钮、复制按钮之后，把光标还给输入框。

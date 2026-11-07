@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { Language } from '../shared/i18n'
-import type { DsApi, QuickEvent, QuickMode, QuickSubmitPayload } from '../shared/types'
+import type {
+  DsApi,
+  QuickEvent,
+  QuickMode,
+  QuickSubmitPayload,
+  ThemeSetting,
+} from '../shared/types'
 
 /**
  * 只暴露给「我们自己的」界面（标题栏、快捷窗口、设置页）。
@@ -18,6 +24,7 @@ const api: DsApi = {
   setHotkey: (accelerator: string) => ipcRenderer.invoke('ds:set-hotkey', accelerator),
   setResetAfter: (minutes: number) => ipcRenderer.invoke('ds:set-reset-after', minutes),
   setLanguage: (language: Language) => ipcRenderer.invoke('ds:set-language', language),
+  setTheme: (theme: ThemeSetting) => ipcRenderer.invoke('ds:set-theme', theme),
   logout: () => ipcRenderer.invoke('ds:logout'),
 
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
@@ -25,6 +32,9 @@ const api: DsApi = {
   submitQuickMessage: (payload: QuickSubmitPayload) => ipcRenderer.send('ds:quick-submit', payload),
   stopQuickGeneration: () => ipcRenderer.send('ds:quick-stop'),
   continueQuickGeneration: () => ipcRenderer.send('ds:quick-continue'),
+  toggleQuickHistory: (open: boolean) => ipcRenderer.send('ds:quick-history-toggle', open),
+  loadMoreQuickHistory: () => ipcRenderer.send('ds:quick-history-more'),
+  selectQuickHistory: (id: string) => ipcRenderer.send('ds:quick-history-select', id),
   setQuickMode: (mode: QuickMode) => ipcRenderer.send('ds:quick-mode', mode),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),

@@ -1,5 +1,6 @@
 import type { WebContentsView } from 'electron'
 import { DEEPSEEK_ORIGIN } from '../../shared/constants'
+import type { HistoryEntry, HistoryMessage } from '../../shared/types'
 import { SELECTOR_KEYS, pagePrelude, type SelectorKey } from './selectors'
 
 /**
@@ -431,5 +432,138 @@ export class DeepSeekPage {
     }
 
     return sawAnything
+  }
+
+  // ── 历史对话 ──────────────────────────────────────────────────
+
+  /**
+   * 读左侧边栏的历史对话（由新到旧）。
+   *
+   * 侧边栏是分页/懒加载的：初始一般渲染 100 条，滚到底会再拉一页。
+   * scrollable 表示“还能滚动”，调用方据此决定要不要继续按需加载。
+   */
+  async readHistory(): Promise<{ items: HistoryEntry[]; scrollable: boolean }> {
+    const result = await this.run<{ items: HistoryEntry[]; scrollable: boolean }>(`
+      const items = [];
+      const seen = new Set();
+      for (const a of document.querySelectorAll('a[href^="/a/chat/s/"]')) {
+        if (!dsVisible(a)) continue;
+        const href = a.getAttribute('href') || '';
+        const id = href.split('/').filter(Boolean).pop() || '';
+        if (!id || seen.has(id)) continue;
+        const title = dsText(a);
+        if (!title) continue;
+        seen.add(id);
+        items.push({ id, title });
+      }
+
+      const scroller = Array.from(document.querySelectorAll('.ds-scroll-area')).find((el) => {
+        const r = el.getBoundingClientRect();
+        return r.x < 380 && el.scrollHeight > el.clientHeight + 40;
+      });
+
+      return {
+        items,
+        scrollable: !!scroller && scroller.scrollHeight > scroller.clientHeight + 40,
+      };
+    `)
+    return result ?? { items: [], scrollable: false }
+  }
+
+  /** 把侧边栏滚到底，触发下一页加载 */
+  async scrollHistoryToBottom(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const scroller = Array.from(document.querySelectorAll('.ds-scroll-area')).find((el) => {
+          const r = el.getBoundingClientRect();
+          return r.x < 380 && el.scrollHeight > el.clientHeight + 40;
+        });
+        if (!scroller) return false;
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        return true;
+      `)) === true
+    )
+  }
+
+  /**
+   * 打开一条历史对话，并读回它最下方当前渲染出来的消息。
+   *
+   * 对话区是虚拟列表：只保留视口附近的消息，所以先滚到最底部，
+   * 再读渲染出来的那一批 —— 也正好符合设计稿「显示最下方内容」。
+   */
+  async openHistory(id: string): Promise<HistoryMessage[] | null> {
+    const clicked = await this.run<boolean>(`
+      const target = ${JSON.stringify(id)};
+      const anchors = Array.from(document.querySelectorAll('a[href^="/a/chat/s/"]'));
+      const link = anchors.find((a) => {
+        const href = a.getAttribute('href') || '';
+        return href.split('/').filter(Boolean).pop() === target;
+      });
+      if (!link) return false;
+      link.scrollIntoView({ block: 'nearest' });
+      link.click();
+      return true;
+    `)
+    if (clicked !== true) return null
+
+    const deadline = Date.now() + 15000
+    let ready = false
+    while (Date.now() < deadline) {
+      const state = await this.run<{ path: string; count: number }>(`
+        return {
+          path: location.pathname,
+          count: document.querySelectorAll('.ds-message').length,
+        };
+      `)
+      if (state?.path.includes(id) && state.count > 0) {
+        ready = true
+        break
+      }
+      await delay(250)
+    }
+    if (!ready) return null
+
+    // 滚到底，等虚拟列表把最后几条渲染出来
+    await this.scrollConversationToBottom()
+    await delay(500)
+    await this.scrollConversationToBottom()
+    await delay(250)
+
+    const messages =
+      (await this.run<HistoryMessage[]>(`
+        const out = [];
+        const seen = new Set();
+        for (const node of document.querySelectorAll('.ds-message')) {
+          if (!dsVisible(node)) continue;
+          const ai = node.querySelector('.ds-assistant-message-main-content');
+          const text = dsReadAnswer(ai || node);
+          if (!text) continue;
+          const role = ai ? 'ai' : 'user';
+          const key = role + '|' + text;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ role, text });
+        }
+        return out.slice(-40);
+      `)) ?? []
+
+    return messages
+  }
+
+  private async scrollConversationToBottom(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const list = document.querySelector('.ds-virtual-list') ||
+          Array.from(document.querySelectorAll('.ds-scroll-area')).find((el) => {
+            const r = el.getBoundingClientRect();
+            return r.x > 300 && el.scrollHeight > el.clientHeight + 40;
+          });
+        if (!list) return false;
+        list.scrollTop = list.scrollHeight;
+        list.dispatchEvent(new Event('scroll', { bubbles: true }));
+        return true;
+      `)) === true
+    )
   }
 }

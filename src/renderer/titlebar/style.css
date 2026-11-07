@@ -29,7 +29,7 @@ body {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  font-family: 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   background: var(--tb-bg);
   user-select: none;
   -webkit-font-smoothing: antialiased;

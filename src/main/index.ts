@@ -1,13 +1,15 @@
-import { app, ipcMain } from 'electron'
-import { existsSync } from 'node:fs'
+import { app, ipcMain, nativeTheme } from 'electron'
+import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
 import { translate, type Language } from '../shared/i18n'
 import type {
+  HistoryEntry,
   HotkeyUpdateResult,
   QuickMode,
   QuickSubmitPayload,
   SettingsSnapshot,
+  ThemeSetting,
 } from '../shared/types'
 import { setQuitting } from './app-state'
 import { writeDomReport } from './deepseek/inspector'
@@ -94,6 +96,9 @@ if (!app.requestSingleInstanceLock()) {
      * 因此都带 skipTransformProcessType —— 进程类型已经在这里定好了。
      */
     if (process.platform === 'darwin') app.setActivationPolicy('accessory')
+
+    // 主题先于任何窗口生效：CSS 的 prefers-color-scheme 会跟着它走
+    nativeTheme.themeSource = load().theme
 
     // 开发/预览时 Dock 还显示 Electron 的默认图标，这里换成自己的。
     // 打包后由 build/icon.icns 提供，不需要这一步。
@@ -212,6 +217,11 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_SCROLL_TEST === '1') {
       runScrollSelfCheck(quickWindow)
     }
+
+    // 历史对话自检：打开弹框 → 读列表 → 选第一条 → 检查内容
+    if (process.env.DS_HISTORY_TEST === '1') {
+      runHistorySelfCheck(mainWindow, quickWindow)
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -263,6 +273,12 @@ function registerIpcHandlers(): void {
       rebuildMenu()
     }
   })
+  ipcMain.handle('ds:set-theme', (_event, theme: ThemeSetting) => {
+    if (theme === 'system' || theme === 'light' || theme === 'dark') {
+      nativeTheme.themeSource = theme
+      save({ theme })
+    }
+  })
   ipcMain.handle('ds:logout', () => handleLogout())
 
   // ── 快捷窗口 ──────────────────────────────────────────────
@@ -308,6 +324,14 @@ function registerIpcHandlers(): void {
 
   ipcMain.on('ds:quick-stop', () => void handleStopGeneration())
   ipcMain.on('ds:quick-continue', () => void handleContinueGeneration())
+
+  ipcMain.on('ds:quick-history-toggle', (_event, open: unknown) => {
+    if (typeof open === 'boolean') void handleHistoryToggle(open)
+  })
+  ipcMain.on('ds:quick-history-more', () => void handleHistoryMore())
+  ipcMain.on('ds:quick-history-select', (_event, id: unknown) => {
+    if (typeof id === 'string') void handleHistorySelect(id)
+  })
 }
 
 // ── 设置 ────────────────────────────────────────────────────────
@@ -318,6 +342,7 @@ function settingsSnapshot(): SettingsSnapshot {
     messages: messages(),
     language: currentLanguage(),
     languageSetting: settings.language,
+    theme: settings.theme,
     hotkey: settings.quickWindow.hotkey,
     hotkeyDisplay: toDisplayAccelerator(settings.quickWindow.hotkey),
     resetAfterMinutes: settings.quickWindow.resetAfterMinutes,
@@ -579,6 +604,109 @@ async function handleContinueGeneration(): Promise<void> {
   quick.sendEvent({ type: 'answer-done' })
 }
 
+// ── 历史对话 ────────────────────────────────────────────────────
+
+let historyPanelOpen = false
+let historyLoadingMore = false
+let historySentIds = new Set<string>()
+
+async function handleHistoryToggle(open: boolean): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+
+  if (!open) {
+    historyPanelOpen = false
+    quick.closeHistoryPanel()
+    return
+  }
+
+  // 生成中不允许切走，否则正在跑的轮询会读到别的会话
+  if (activeToken) {
+    quick.sendEvent({ type: 'history-panel', open: false })
+    return
+  }
+
+  historyPanelOpen = true
+  historySentIds = new Set()
+  quick.openHistoryPanel()
+
+  const page = new DeepSeekPage(win.pageView)
+  let result: { items: HistoryEntry[]; scrollable: boolean } = { items: [], scrollable: false }
+
+  // 页面可能刚启动、侧边栏是懒渲染的，等一会儿再读
+  for (let i = 0; i < 20; i++) {
+    result = await page.readHistory()
+    if (result.items.length > 0 || !historyPanelOpen) break
+    await delay(500)
+  }
+
+  if (!historyPanelOpen) return
+  for (const item of result.items) historySentIds.add(item.id)
+  quick.sendEvent({
+    type: 'history-list',
+    items: result.items,
+    append: false,
+    // 列表比视口高就说明可能还有下一页；至少让用户有机会加载一次
+    hasMore: result.scrollable && result.items.length > 0,
+  })
+}
+
+async function handleHistoryMore(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick || !historyPanelOpen || historyLoadingMore) return
+
+  historyLoadingMore = true
+  try {
+    const page = new DeepSeekPage(win.pageView)
+    const scrolled = await page.scrollHistoryToBottom()
+    if (!scrolled) {
+      quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+      return
+    }
+
+    // 侧边栏加载下一页需要一点时间；等太短会误判成「到底了」
+    await delay(1200)
+    const { items } = await page.readHistory()
+    const fresh = items.filter((item) => !historySentIds.has(item.id))
+    for (const item of fresh) historySentIds.add(item.id)
+
+    if (!historyPanelOpen) return
+    quick.sendEvent({
+      type: 'history-list',
+      items: fresh,
+      append: true,
+      // 这一屏确实拉到了新内容，就认为后面可能还有；没有新增就到底了
+      hasMore: fresh.length > 0,
+    })
+  } finally {
+    historyLoadingMore = false
+  }
+}
+
+async function handleHistorySelect(id: string): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+  if (activeToken) return
+
+  historyPanelOpen = false
+  // 空态点历史时窗口是临时撑高的，切到有内容态会重新算尺寸
+  quick.setMode('content')
+  quick.sendEvent({ type: 'history-panel', open: false })
+  quick.sendEvent({ type: 'history-start' })
+
+  const page = new DeepSeekPage(win.pageView)
+  const messages = await page.openHistory(id)
+
+  if (!messages) {
+    quick.sendEvent({ type: 'error', message: '打不开这个历史对话，稍后再试' })
+    return
+  }
+  quick.sendEvent({ type: 'history-loaded', messages })
+}
+
 /** 让 DeepSeek 网页开一个新对话，并把面板收回空态 */
 async function startNewChatOnPage(): Promise<void> {
   const win = mainWindow
@@ -664,11 +792,19 @@ function runSettingsSelfCheck(): void {
           resetValue: document.getElementById('resetAfter').value,
           languageOptions: Array.from(document.getElementById('language').options).map((o) => o.textContent),
           languageValue: document.getElementById('language').value,
+          themeOptions: Array.from(document.getElementById('theme').options).map((o) => o.textContent),
+          themeValue: document.getElementById('theme').value,
           version: document.getElementById('version').textContent,
           logout: document.getElementById('logout').textContent,
+          window: [innerWidth, innerHeight],
         }))()`,
       )
       console.log('[设置自检] 界面:', JSON.stringify(probe, null, 1))
+      try {
+        writeFileSync('/tmp/ds-settings.png', (await win.webContents.capturePage()).toPNG())
+      } catch (error) {
+        console.log('[设置自检] 截图失败:', String(error))
+      }
 
       // 改键：Alt+Space → Control+Shift+D，再改回来。
       // 重点看失败时会不会把用户原来的键弄丢。
@@ -698,9 +834,24 @@ function runSettingsSelfCheck(): void {
       )
       console.log('[设置自检] 英文界面:', JSON.stringify(enProbe))
 
-      // 还原
+      // 先还原语言，再切浅色主题截图对比设计稿
       save({ language: 'system' })
       rebuildMenu()
+      nativeTheme.themeSource = 'light'
+      save({ theme: 'light' })
+      closeSettingsWindow()
+      openSettingsWindow()
+      await delay(1200)
+      try {
+        const lightWin = getSettingsWindow()
+        if (lightWin) {
+          writeFileSync('/tmp/ds-settings-light.png', (await lightWin.webContents.capturePage()).toPNG())
+        }
+      } catch (error) {
+        console.log('[设置自检] 浅色截图失败:', String(error))
+      }
+      nativeTheme.themeSource = 'system'
+      save({ theme: 'system' })
     })()
   }, 4000)
 }
@@ -1265,5 +1416,118 @@ function runScrollSelfCheck(quick: QuickWindow | null): void {
     void run(measure).then((r) => console.log('[滚动测试] 结束后:', JSON.stringify(r)))
   }, 7400)
 
-  setTimeout(() => process.exit(0), 8000)
+  // 历史对话落点：最后一条用户消息应该顶到「顶栏下方 10px」
+  setTimeout(() => {
+    quick?.sendEvent({
+      type: 'history-loaded',
+      messages: [
+        { role: 'user', text: '历史里的最后一问' },
+        { role: 'ai', text: '这是一段很长的历史回答。'.repeat(80) },
+      ],
+    })
+  }, 7600)
+  setTimeout(() => {
+    void run(measure).then((r) => console.log('[滚动测试] 历史落点:', JSON.stringify(r)))
+  }, 8000)
+
+  setTimeout(() => process.exit(0), 8600)
 }
+
+/** 历史对话功能自检：打开弹框 → 读列表 → 选第一条 → 检查快捷窗口内容 */
+function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null): void {
+  if (!win || !quick) return
+  const run = (js: string): Promise<unknown> =>
+    quick ? quick.window.webContents.executeJavaScript(js) : Promise.resolve(null)
+
+  const log = async (tag: string, js: string): Promise<unknown> => {
+    const result = await run(js).catch((error) => ({ error: String(error) }))
+    console.log(`[历史测试] ${tag}:`, JSON.stringify(result))
+    return result
+  }
+
+  const shot = async (name: string): Promise<void> => {
+    try {
+      // 等合成器把最新一帧画出来
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const image = await quick.window.webContents.capturePage()
+      writeFileSync(`/tmp/ds-history-${name}.png`, image.toPNG())
+    } catch (error) {
+      console.log('[历史测试] 截图失败:', String(error))
+    }
+  }
+
+  setTimeout(() => quick.show(), 1500)
+  setTimeout(() => void shot('empty'), 2500)
+  setTimeout(() => void run(`document.getElementById('history').click()`), 3500)
+
+  const listState = `(() => {
+    const panel = document.getElementById('historyPanel')
+    const app = document.getElementById('app')
+    const r = panel.getBoundingClientRect()
+    const item = document.querySelector('.history-item')
+    const list = document.getElementById('historyList')
+    return {
+      open: panel.classList.contains('open'),
+      items: document.querySelectorAll('.history-item').length,
+      pressed: document.getElementById('history').getAttribute('aria-pressed'),
+      mode: app.dataset.mode,
+      window: [innerWidth, innerHeight],
+      panel: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
+      appBg: getComputedStyle(app).backgroundColor,
+      clipped: item ? getComputedStyle(item).textOverflow : null,
+      list: [list.clientHeight, list.scrollHeight, Math.round(list.scrollTop)],
+    }
+  })()`
+
+  const conversationState = `(() => {
+    const m = document.getElementById('messages')
+    const app = document.getElementById('app')
+    return {
+      mode: app.dataset.mode,
+      window: [innerWidth, innerHeight],
+      groups: document.querySelectorAll('.msg-group').length,
+      users: document.querySelectorAll('.msg-user').length,
+      answers: document.querySelectorAll('.msg-ai').length,
+      thinking: !!document.querySelector('.thinking'),
+      atBottom: m.scrollHeight - m.scrollTop - m.clientHeight <= 4,
+      historyOpen: document.getElementById('historyPanel').classList.contains('open'),
+    }
+  })()`
+
+  // 等列表出来（页面侧边栏可能还在加载）
+  let waited = 0
+  const poll = setInterval(() => {
+    waited += 500
+    void run(`document.querySelectorAll('.history-item').length`).then((count) => {
+      if ((count as number) === 0 && waited < 15000) return
+      clearInterval(poll)
+
+      void (async () => {
+        await log('列表', listState)
+        await shot('list')
+
+        // 懒加载：把弹框滚到底
+        await run(`(() => { const l = document.getElementById('historyList'); l.scrollTop = l.scrollHeight; })()`)
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        await log('加载更多', `({ items: document.querySelectorAll('.history-item').length })`)
+
+        // 选第一条历史对话
+        await run(`document.querySelector('.history-item')?.click()`)
+        await new Promise((resolve) => setTimeout(resolve, 6500))
+        await log('对话', conversationState)
+        await shot('content')
+
+        // 有内容态再打开历史（不应改窗口尺寸）
+        await run(`document.getElementById('history').click()`)
+        await new Promise((resolve) => setTimeout(resolve, 1800))
+        await log('内容态弹框', listState)
+        await shot('content-history')
+        process.exit(0)
+      })()
+    })
+  }, 500)
+
+  // 兜底：列表一直不出来也别卡死
+  setTimeout(() => process.exit(0), 30000)
+}
+

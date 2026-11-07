@@ -8,9 +8,9 @@ import { join } from 'node:path'
  * （快捷键 / 重置为新聊天 / 语言 / 版本号）与「退出登录」在 P4 实现。
  */
 
-// 设计稿画板尺寸
-const WIDTH = 564
-const HEIGHT = 694
+// 设计稿画板尺寸（设置页调整.html：360×460）
+const WIDTH = 360
+const HEIGHT = 460
 
 let instance: BrowserWindow | null = null
 
@@ -30,7 +30,7 @@ export function openSettingsWindow(): void {
     fullscreenable: false,
     title: '设置',
     titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 18, y: 18 },
+    trafficLightPosition: { x: 14, y: 12 },
     show: false,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1c20' : '#f6f6f6',
     webPreferences: {
