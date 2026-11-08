@@ -12,6 +12,7 @@ import type {
   QuickMode,
   QuickSubmitPayload,
 } from '../../shared/types'
+import { renderAiContent } from './markdown'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
@@ -467,7 +468,7 @@ async function copyText(text: string, button: HTMLButtonElement): Promise<void> 
   focusInput()
 }
 
-function appendMessage(kind: 'user' | 'ai', text: string): HTMLElement {
+function appendMessage(kind: 'user' | 'ai', text: string, html?: string): HTMLElement {
   const group = document.createElement('div')
   group.className = 'msg-group'
 
@@ -475,7 +476,11 @@ function appendMessage(kind: 'user' | 'ai', text: string): HTMLElement {
   if (template instanceof HTMLTemplateElement) group.appendChild(template.content.cloneNode(true))
 
   const body = group.querySelector(kind === 'user' ? '.bubble' : '.body') as HTMLElement
-  body.textContent = text
+  if (kind === 'ai') {
+    renderAiContent(body, text, html)
+  } else {
+    body.textContent = text
+  }
 
   const actions = group.querySelector('.msg-actions') as HTMLElement
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
@@ -667,9 +672,9 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'answer-update': {
       removeThinking()
       if (streamingBody) {
-        streamingBody.textContent = event.text
+        renderAiContent(streamingBody, event.text, event.html)
       } else {
-        streamingBody = appendMessage('ai', event.text)
+        streamingBody = appendMessage('ai', event.text, event.html)
       }
       // 设计稿：生成过程中不自动滚动，只更新「滚动到底部」按钮
       updateScrollButton()
@@ -778,7 +783,11 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       removeThinking()
       clearMessages()
       for (const message of event.messages) {
-        appendMessage(message.role === 'user' ? 'user' : 'ai', message.text)
+        appendMessage(
+          message.role === 'user' ? 'user' : 'ai',
+          message.text,
+          message.html,
+        )
       }
       historyLoading = false
       busy = false
@@ -856,6 +865,16 @@ app.addEventListener(
   },
   true,
 )
+
+// Markdown 里的链接：一律用系统浏览器打开，不让面板自己导航
+messagesInner.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement | null
+  const link = target?.closest('a')
+  if (!link) return
+  event.preventDefault()
+  const href = link.getAttribute('href')
+  if (href) window.ds?.openExternal(href)
+})
 
 // 滚动时更新「滚动到底部」按钮；内容/可视区尺寸变化时也要更新
 messages.addEventListener('scroll', updateScrollButton, { passive: true })

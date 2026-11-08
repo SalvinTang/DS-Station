@@ -18,6 +18,7 @@ import type {
 const api: DsApi = {
   getVersion: () => ipcRenderer.invoke('ds:get-version'),
   getMessages: () => ipcRenderer.invoke('ds:get-messages'),
+  openExternal: (url: string) => ipcRenderer.send('ds:open-external', url),
 
   openSettings: () => ipcRenderer.send('ds:open-settings'),
   getSettings: () => ipcRenderer.invoke('ds:get-settings'),

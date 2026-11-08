@@ -1,4 +1,4 @@
-import { app, ipcMain, nativeTheme } from 'electron'
+import { app, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
@@ -222,6 +222,11 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_HISTORY_TEST === '1') {
       runHistorySelfCheck(mainWindow, quickWindow)
     }
+
+    // Markdown 渲染自检：注入一段含代码/表格/公式/链接的 HTML，截图验证
+    if (process.env.DS_MD_UI_TEST === '1') {
+      runMarkdownUiSelfCheck(quickWindow)
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -255,6 +260,19 @@ function rebuildMenu(): void {
 
 function registerIpcHandlers(): void {
   ipcMain.on('ds:open-settings', () => openSettingsWindow())
+
+  // 快捷窗口里的 Markdown 链接：只在系统浏览器打开，不允许导航本地面板
+  ipcMain.on('ds:open-external', (_event, url: unknown) => {
+    if (typeof url !== 'string') return
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        void shell.openExternal(url)
+      }
+    } catch {
+      // 非法 URL 直接忽略
+    }
+  })
   ipcMain.handle('ds:get-version', () => app.getVersion())
   ipcMain.handle('ds:get-messages', () => messages())
 
@@ -476,8 +494,8 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     if (!appeared) throw new Error('等不到新的回答')
 
     const got = await page.streamLastAnswer(
-      (text) => {
-        quick.sendEvent({ type: 'answer-update', text })
+      (text, html) => {
+        quick.sendEvent({ type: 'answer-update', text, html })
       },
       120000,
       token,
@@ -582,8 +600,8 @@ async function handleContinueGeneration(): Promise<void> {
     }
 
     const got = await page.streamLastAnswer(
-      (text) => {
-        quick.sendEvent({ type: 'answer-update', text })
+      (text, html) => {
+        quick.sendEvent({ type: 'answer-update', text, html })
       },
       120000,
       token,
@@ -1517,6 +1535,75 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         await log('对话', conversationState)
         await shot('content')
 
+        // Markdown 渲染检查：滚到第一条 AI 回答顶部，统计各类元素
+        await run(`(() => {
+          const m = document.getElementById('messages')
+          const body = document.querySelector('.msg-ai .body.md')
+          if (body) {
+            const top = body.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop
+            m.scrollTop = Math.max(0, top - 50)
+          }
+          return true
+        })()`)
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await log('Markdown', `(() => ({
+          mdBodies: document.querySelectorAll('.msg-ai .body.md').length,
+          h1: document.querySelectorAll('.md h1').length,
+          h2: document.querySelectorAll('.md h2').length,
+          h3: document.querySelectorAll('.md h3').length,
+          h4: document.querySelectorAll('.md h4').length,
+          ul: document.querySelectorAll('.md ul').length,
+          ol: document.querySelectorAll('.md ol').length,
+          blockquote: document.querySelectorAll('.md blockquote').length,
+          tables: document.querySelectorAll('.md table').length,
+          pres: document.querySelectorAll('.md pre').length,
+          inlineCode: document.querySelectorAll('.md :not(pre) > code').length,
+          links: document.querySelectorAll('.md a').length,
+          mathInline: document.querySelectorAll('.md .md-math-inline').length,
+          mathDisplay: document.querySelectorAll('.md .md-math-display').length,
+          katexLeftover: document.querySelectorAll('.md .katex').length,
+          svgLeftover: document.querySelectorAll('.md svg').length,
+          tokens: document.querySelectorAll('.md .token').length,
+        }))()`)
+        await shot('md-top')
+
+        // 引用角标：数字胶囊 + 来源图标
+        await log('角标', `(() => {
+          const cites = [...document.querySelectorAll('.md .md-cite')];
+          const icons = [...document.querySelectorAll('.md .md-cite-icon')];
+          return {
+            cites: cites.length,
+            brands: document.querySelectorAll('.md .md-cite-brand').length,
+            icons: icons.length,
+            labels: cites.slice(0, 10).map((el) => (el.textContent || '').trim()),
+            iconLoaded: icons.map((img) => ({ complete: img.complete, w: img.naturalWidth })),
+          };
+        })()`)
+        await run(`(() => {
+          const m = document.getElementById('messages');
+          const el = document.querySelector('.md .md-cite');
+          if (el) {
+            const top = el.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop;
+            m.scrollTop = Math.max(0, top - 140);
+          }
+          return true;
+        })()`)
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        await shot('md-cite')
+
+        // 滚到第一个表格/代码/公式附近再截一张
+        await run(`(() => {
+          const m = document.getElementById('messages')
+          const el = document.querySelector('.md table, .md pre, .md .md-math-display')
+          if (el) {
+            const top = el.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop
+            m.scrollTop = Math.max(0, top - 60)
+          }
+          return true
+        })()`)
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await shot('md-block')
+
         // 有内容态再打开历史（不应改窗口尺寸）
         await run(`document.getElementById('history').click()`)
         await new Promise((resolve) => setTimeout(resolve, 1800))
@@ -1531,3 +1618,78 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
   setTimeout(() => process.exit(0), 30000)
 }
 
+
+/** 自检：注入一段 Markdown HTML，验证代码/表格/公式/链接和浅色配色 */
+function runMarkdownUiSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+
+  const sample = `
+    <div class="ds-markdown ds-assistant-message-main-content">
+      <h2>代码与表格</h2>
+      <p>行内 <code>inlineCode</code>，链接 <a href="https://example.com" target="_blank">example.com</a></p>
+      <div class="md-code-block md-code-block-dark">
+        <div>类型提示</div>
+        <pre><code><span class="token comment">// 示例</span>
+<span class="token keyword">const</span> <span class="token function">add</span> <span class="token operator">=</span> <span class="token punctuation">(</span><span class="token parameter">a</span><span class="token punctuation">,</span> <span class="token parameter">b</span><span class="token punctuation">)</span> <span class="token operator">=&gt;</span> <span class="token parameter">a</span> <span class="token operator">+</span> <span class="token parameter">b</span><span class="token punctuation">;</span>
+<span class="token function">add</span><span class="token punctuation">(</span><span class="token number">1</span><span class="token punctuation">,</span> <span class="token number">2</span><span class="token punctuation">)</span><span class="token punctuation">;</span></code></pre>
+        <svg viewBox="0 0 16 16"><path d="M0 0h16v16H0z"/></svg>
+      </div>
+      <table>
+        <thead><tr><th>列一</th><th>列二</th></tr></thead>
+        <tbody><tr><td>内容</td><td>值</td></tr></tbody>
+      </table>
+      <p>公式：<span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></mrow></semantics></math></span><span class="katex-html">坏掉的排版</span></span></p>
+      <span class="katex-display ds-markdown-math"><span class="katex"><span class="katex-mathml"><math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mfrac><mn>1</mn><mn>2</mn></mfrac></mrow></semantics></math></span><span class="katex-html">坏掉的排版</span></span></span>
+      <script>alert('xss')</script>
+      <span class="ds-markdown-html">&lt;kbd&gt;</span>
+    </div>
+  `
+
+  setTimeout(() => quick.show(), 1200)
+  setTimeout(() => quick.setMode('content'), 2000)
+  setTimeout(() => {
+    nativeTheme.themeSource = 'light'
+    quick.sendEvent({
+      type: 'history-loaded',
+      messages: [
+        { role: 'user', text: '代码和高亮测试' },
+        { role: 'ai', text: '示例', html: sample },
+      ],
+    })
+  }, 2600)
+
+  setTimeout(() => {
+    void quick.window.webContents
+      .executeJavaScript(
+        `(() => {
+          const pre = document.querySelector('.md pre');
+          const bubble = document.querySelector('.msg-user .bubble');
+          return {
+            preBg: pre ? getComputedStyle(pre).backgroundColor : null,
+            bubbleBg: bubble ? getComputedStyle(bubble).backgroundColor : null,
+            tokens: document.querySelectorAll('.md .token').length,
+            tables: document.querySelectorAll('.md table').length,
+            math: document.querySelectorAll('.md math').length,
+            links: document.querySelectorAll('.md a').length,
+            scripts: document.querySelectorAll('.md script').length,
+            svg: document.querySelectorAll('.md svg').length,
+            katexLeftover: document.querySelectorAll('.md .katex').length,
+            groups: document.querySelectorAll('.msg-group').length,
+          };
+        })()`,
+      )
+      .then(async (state) => {
+        console.log('[MD UI测试] ' + JSON.stringify(state))
+        try {
+          writeFileSync(
+            '/tmp/ds-md-ui-light.png',
+            (await quick.window.webContents.capturePage()).toPNG(),
+          )
+        } catch (error) {
+          console.log('[MD UI测试] 截图失败:', String(error))
+        }
+        nativeTheme.themeSource = 'system'
+        setTimeout(() => process.exit(0), 400)
+      })
+  }, 3400)
+}

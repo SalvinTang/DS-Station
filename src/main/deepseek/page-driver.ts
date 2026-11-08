@@ -397,33 +397,63 @@ export class DeepSeekPage {
   }
 
   /**
+   * 最后一条回答的纯文本 + 页面里渲染好的 HTML。
+   * HTML 直接来自 `.ds-assistant-message-main-content`，
+   * 由快捷窗口做白名单清洗后显示。
+   */
+  async lastAnswerRich(): Promise<{ text: string; html: string } | null> {
+    return this.run<{ text: string; html: string }>(`
+      for (const sel of DS_SELECTORS.assistantMessage) {
+        let nodes;
+        try { nodes = document.querySelectorAll(sel); } catch (e) { continue; }
+        if (!nodes.length) continue;
+        const el = nodes[nodes.length - 1];
+        return { text: dsReadAnswer(el), html: el.outerHTML };
+      }
+      return null;
+    `)
+  }
+
+  /**
    * 盯住最后一条回答，每变一次就回调一次，直到它稳定下来。
    * 返回是否成功拿到过内容。
+   *
+   * 回调同时带 text 和 html：text 用于兜底和复制，html 用于 Markdown 渲染。
+   * HTML 每 300ms 最多推一次，避免每 150ms 重排一次气泡。
    */
   async streamLastAnswer(
-    onUpdate: (text: string) => void,
+    onUpdate: (text: string, html: string) => void,
     timeoutMs = 120000,
     token?: StreamToken,
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     let last = ''
     let lastChangedAt = Date.now()
+    let lastPushAt = 0
     let sawAnything = false
 
     while (Date.now() < deadline) {
       // 用户点了停止：立刻退出，不再推增量
       if (token?.cancelled) return sawAnything
-      const answers = await this.listAnswers()
-      const current = answers.length ? answers[answers.length - 1] : ''
+      const rich = await this.lastAnswerRich()
+      const current = rich?.text ?? ''
+      const html = rich?.html ?? ''
+      const now = Date.now()
+      const changed = current !== last
 
-      if (current !== last) {
+      if (changed) {
         last = current
-        lastChangedAt = Date.now()
-        if (current) {
-          sawAnything = true
-          onUpdate(current)
-        }
-      } else if (sawAnything && Date.now() - lastChangedAt > ANSWER_SETTLE_MS) {
+        lastChangedAt = now
+      }
+
+      // 统一按 300ms 推，保证 text 和 html 永远成对出现
+      if (current && now - lastPushAt >= 300) {
+        sawAnything = true
+        lastPushAt = now
+        onUpdate(current, html)
+      }
+
+      if (sawAnything && now - lastChangedAt > ANSWER_SETTLE_MS) {
         // 内容超过 1.2 秒没再变，认为这一轮说完了
         return true
       }
@@ -524,11 +554,12 @@ export class DeepSeekPage {
     }
     if (!ready) return null
 
-    // 滚到底，等虚拟列表把最后几条渲染出来
+    // 滚到底，等虚拟列表把最后几条渲染出来；
+    // 角标的来源图标/名称是后一步才补上的，多等一会儿再读 HTML
     await this.scrollConversationToBottom()
-    await delay(500)
+    await delay(900)
     await this.scrollConversationToBottom()
-    await delay(250)
+    await delay(900)
 
     const messages =
       (await this.run<HistoryMessage[]>(`
@@ -543,7 +574,7 @@ export class DeepSeekPage {
           const key = role + '|' + text;
           if (seen.has(key)) continue;
           seen.add(key);
-          out.push({ role, text });
+          out.push({ role, text, html: ai ? ai.outerHTML : undefined });
         }
         return out.slice(-40);
       `)) ?? []

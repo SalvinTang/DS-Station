@@ -12,18 +12,19 @@ export interface HistoryEntry {
   title: string
 }
 
-/** 历史对话里的消息（快速窗口只显示纯文本） */
+/** 历史对话里的消息。AI 消息额外带渲染好的 HTML（快速窗口负责清洗） */
 export interface HistoryMessage {
   role: 'user' | 'ai'
   text: string
+  html?: string
 }
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
 export type QuickEvent =
   /** 消息已发出，界面可以进入「等待回答」 */
   | { type: 'answer-start' }
-  /** 回答增量更新（纯文本） */
-  | { type: 'answer-update'; text: string }
+  /** 回答增量更新：text 用于纯文本兜底/复制，html 是页面里渲染好的 Markdown */
+  | { type: 'answer-update'; text: string; html?: string }
   /** 回答结束 */
   | { type: 'answer-done' }
   /**
@@ -95,6 +96,9 @@ export interface DsApi {
 
   /** 拉取当前语言的文案表 */
   getMessages: () => Promise<Record<string, string>>
+
+  /** 用系统浏览器打开链接（只允许 http/https） */
+  openExternal: (url: string) => void
 
   // ── 设置 ──────────────────────────────────────────────────
 
