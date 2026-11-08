@@ -1,4 +1,4 @@
-import { app, ipcMain, nativeTheme, shell } from 'electron'
+import { app, clipboard, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
@@ -1500,7 +1500,11 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
   const conversationState = `(() => {
     const m = document.getElementById('messages')
     const app = document.getElementById('app')
+    const users = document.querySelectorAll('.msg-user')
+    const lastUser = users[users.length - 1]
     return {
+      lastUserTop: lastUser ? Math.round(lastUser.getBoundingClientRect().top - m.getBoundingClientRect().top) : null,
+      scrollTop: Math.round(m.scrollTop),
       mode: app.dataset.mode,
       window: [innerWidth, innerHeight],
       groups: document.querySelectorAll('.msg-group').length,
@@ -1530,7 +1534,7 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         await log('加载更多', `({ items: document.querySelectorAll('.history-item').length })`)
 
         // 选第一条历史对话
-        await run(`document.querySelector('.history-item')?.click()`)
+        await run(`(() => { const items = [...document.querySelectorAll('.history-item')]; const hit = items.find((el) => (el.textContent || '').includes('知名')); (hit || items[0])?.click(); return !!hit; })()`)
         await new Promise((resolve) => setTimeout(resolve, 6500))
         await log('对话', conversationState)
         await shot('content')
@@ -1564,6 +1568,13 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
           katexLeftover: document.querySelectorAll('.md .katex').length,
           svgLeftover: document.querySelectorAll('.md svg').length,
           tokens: document.querySelectorAll('.md .token').length,
+          codeBlocks: document.querySelectorAll('.md .md-code-block').length,
+          codeHeads: document.querySelectorAll('.md .md-code-head').length,
+          codeLangs: [...document.querySelectorAll('.md .md-code-lang')].map((el) => (el.textContent || '').trim()),
+          codeCopies: document.querySelectorAll('.md .md-code-copy').length,
+          codeCopyLabels: [...document.querySelectorAll('.md .md-code-copy')].map((el) => el.getAttribute('aria-label')),
+          codeBg: (() => { const el = document.querySelector('.md .md-code-block'); return el ? getComputedStyle(el).backgroundColor : null })(),
+          codeHeadBg: (() => { const el = document.querySelector('.md .md-code-head'); return el ? getComputedStyle(el).backgroundColor : null })(),
         }))()`)
         await shot('md-top')
 
@@ -1594,7 +1605,7 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         // 滚到第一个表格/代码/公式附近再截一张
         await run(`(() => {
           const m = document.getElementById('messages')
-          const el = document.querySelector('.md table, .md pre, .md .md-math-display')
+          const el = document.querySelector('.md .md-code-block, .md table, .md pre, .md .md-math-display')
           if (el) {
             const top = el.getBoundingClientRect().top - m.getBoundingClientRect().top + m.scrollTop
             m.scrollTop = Math.max(0, top - 60)
@@ -1603,6 +1614,43 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         })()`)
         await new Promise((resolve) => setTimeout(resolve, 400))
         await shot('md-block')
+
+        // 代码块复制按钮：用真实鼠标事件点击，读剪贴板验证
+        const previousClipboard = await clipboard.readText()
+        const point = (await run(`(() => {
+          const button = document.querySelector('.md-code-copy');
+          if (!button) return null;
+          const r = button.getBoundingClientRect();
+          return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
+        })()`)) as { x: number; y: number } | null
+        if (point) {
+          quick.window.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
+          quick.window.webContents.sendInputEvent({
+            type: 'mouseDown',
+            x: point.x,
+            y: point.y,
+            button: 'left',
+            clickCount: 1,
+          })
+          quick.window.webContents.sendInputEvent({
+            type: 'mouseUp',
+            x: point.x,
+            y: point.y,
+            button: 'left',
+            clickCount: 1,
+          })
+          await new Promise((resolve) => setTimeout(resolve, 450))
+          const copied = await clipboard.readText()
+          const state = await run(`(() => {
+            const button = document.querySelector('.md-code-copy');
+            return button ? { copied: button.classList.contains('copied'), label: button.getAttribute('aria-label') } : null;
+          })()`)
+          console.log(
+            '[历史测试] 代码复制:',
+            JSON.stringify({ len: copied.length, preview: copied.slice(0, 24), state }),
+          )
+          await clipboard.writeText(previousClipboard)
+        }
 
         // 有内容态再打开历史（不应改窗口尺寸）
         await run(`document.getElementById('history').click()`)
@@ -1664,7 +1712,19 @@ function runMarkdownUiSelfCheck(quick: QuickWindow | null): void {
         `(() => {
           const pre = document.querySelector('.md pre');
           const bubble = document.querySelector('.msg-user .bubble');
+          const fade = document.getElementById('messagesFade');
+          const composer = document.querySelector('.composer');
+          const fr = fade ? fade.getBoundingClientRect() : null;
+          const cr = composer ? composer.getBoundingClientRect() : null;
           return {
+            fade: fade && fr && cr ? {
+              rect: [Math.round(fr.left), Math.round(fr.top), Math.round(fr.width), Math.round(fr.height)],
+              bottom: Math.round(fr.bottom),
+              composerTop: Math.round(cr.top),
+              opacity: getComputedStyle(fade).opacity,
+              z: getComputedStyle(fade).zIndex,
+              bg: getComputedStyle(fade).backgroundImage,
+            } : null,
             preBg: pre ? getComputedStyle(pre).backgroundColor : null,
             bubbleBg: bubble ? getComputedStyle(bubble).backgroundColor : null,
             tokens: document.querySelectorAll('.md .token').length,

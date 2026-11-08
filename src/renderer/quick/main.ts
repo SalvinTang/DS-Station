@@ -12,7 +12,7 @@ import type {
   QuickMode,
   QuickSubmitPayload,
 } from '../../shared/types'
-import { renderAiContent } from './markdown'
+import { renderAiContent, setMarkdownLabels } from './markdown'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
@@ -85,6 +85,7 @@ function applyMessages(): void {
   if (smartSearchLabel) smartSearchLabel.textContent = t('quick.smartSearchShort')
   if (historyLabel) historyLabel.textContent = t('quick.history')
   if (historyEmpty) historyEmpty.textContent = t('quick.noHistory')
+  setMarkdownLabels({ copyCode: t('quick.copyCode') })
 
   const labelled: [Element | null, string][] = [
     [deepThinkButton, 'quick.deepThink'],
@@ -116,6 +117,8 @@ const topbar = document.getElementById('topbar') as HTMLElement
 const messages = document.getElementById('messages') as HTMLElement
 const messagesInner = document.getElementById('messagesInner') as HTMLElement
 const messagesTail = document.getElementById('messagesTail') as HTMLElement
+const messagesFade = document.getElementById('messagesFade') as HTMLElement
+const composer = document.querySelector('.composer') as HTMLElement
 
 const input = document.getElementById('input') as HTMLTextAreaElement
 const deepThinkButton = document.getElementById('deepThink')
@@ -144,6 +147,8 @@ let historyHasMore = false
 let historyLoadPending = false
 /** 正在等主进程把选中的历史对话读回来（这期间不让发送） */
 let historyLoading = false
+/** 历史对话加载后的落点，等布局稳定（字体/图片/窗口动画）再对齐一次 */
+let historyLandingGroup: HTMLElement | null = null
 /** 已经渲染过的历史条目，用来去重 */
 const historySeen = new Set<string>()
 /** 拖动窗口：按下时的鼠标屏幕坐标 */
@@ -180,6 +185,7 @@ function autosize(): void {
   }
 
   if (historyOpen) placeHistoryPanel()
+  placeMessagesFade()
 }
 
 /** 当前发送按钮是不是「停止」形态，避免每次输入都重写 innerHTML */
@@ -222,6 +228,14 @@ function togglePressed(element: Element | null): void {
 // ── 历史对话弹框 ─────────────────────────────────────────────
 
 /** 把弹框贴到输入框正上方（输入框高度变化时也要重新算） */
+/** 底部渐隐蒙层：底边贴住输入框顶部，输入框长高时跟着上移 */
+function placeMessagesFade(): void {
+  const appRect = app.getBoundingClientRect()
+  const composerRect = composer.getBoundingClientRect()
+  const appBottom = appRect.top + app.clientTop + app.clientHeight
+  messagesFade.style.bottom = `${Math.round(appBottom - composerRect.top)}px`
+}
+
 function placeHistoryPanel(): void {
   const appRect = app.getBoundingClientRect()
   const buttonRect = historyButton.getBoundingClientRect()
@@ -508,6 +522,7 @@ function removeThinking(): void {
 }
 
 function clearMessages(): void {
+  historyLandingGroup = null
   messagesInner.replaceChildren()
   messagesTail.style.height = '0px'
   streamingBody = null
@@ -596,7 +611,10 @@ function applyMode(next: QuickMode): void {
   autosize()
   syncSendState()
   // 布局要等一帧才稳定（展开动画期间高度在变）
-  requestAnimationFrame(updateScrollButton)
+  requestAnimationFrame(() => {
+    updateScrollButton()
+    placeMessagesFade()
+  })
 }
 
 function switchToContent(): void {
@@ -734,6 +752,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'transition-done': {
       // 展开动画结束，内容淡入
       app.classList.remove('content-enter')
+      placeMessagesFade()
       break
     }
 
@@ -805,6 +824,23 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         const group = lastUser?.closest('.msg-group') as HTMLElement | null
         if (mode === 'content' && group) {
           alignMessageToTop(group, false)
+          // 等字体/图片/代码块和窗口展开动画都稳定后再对齐一次，
+          // 防止后面的内容把气泡顶偏
+          const landingGroup = group
+          const landingScrollTop = messages.scrollTop
+          historyLandingGroup = group
+          window.setTimeout(() => {
+            if (historyLandingGroup !== landingGroup || !landingGroup.isConnected) return
+            if (mode !== 'content') return
+            // 用户已经自己滚动过，就不要再抢位置
+            if (Math.abs(messages.scrollTop - landingScrollTop) > 2) {
+              historyLandingGroup = null
+              return
+            }
+            alignMessageToTop(landingGroup, false)
+            updateScrollButton()
+            historyLandingGroup = null
+          }, 450)
         } else {
           messages.scrollTop = messages.scrollHeight
         }
@@ -1027,6 +1063,7 @@ window.addEventListener('focus', focusInput)
 // 窗口尺寸变化（空态展开历史、用户缩放有内容态）后重新贴一下弹框
 window.addEventListener('resize', () => {
   if (historyOpen) placeHistoryPanel()
+  placeMessagesFade()
 })
 
 /*

@@ -564,17 +564,12 @@ export class DeepSeekPage {
     const messages =
       (await this.run<HistoryMessage[]>(`
         const out = [];
-        const seen = new Set();
         for (const node of document.querySelectorAll('.ds-message')) {
           if (!dsVisible(node)) continue;
           const ai = node.querySelector('.ds-assistant-message-main-content');
           const text = dsReadAnswer(ai || node);
           if (!text) continue;
-          const role = ai ? 'ai' : 'user';
-          const key = role + '|' + text;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          out.push({ role, text, html: ai ? ai.outerHTML : undefined });
+          out.push({ role: ai ? 'ai' : 'user', text, html: ai ? ai.outerHTML : undefined });
         }
         return out.slice(-40);
       `)) ?? []

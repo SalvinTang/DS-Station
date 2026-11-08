@@ -36,6 +36,56 @@ const INLINE_TAGS = new Set(['strong', 'b', 'em', 'i', 'del', 's', 'sup', 'sub',
 
 const MATH_NS = 'http://www.w3.org/1998/Math/MathML'
 
+/** 代码块右上角的复制按钮 */
+let copyCodeLabel = '复制代码'
+
+export function setMarkdownLabels(labels: { copyCode: string }): void {
+  if (labels.copyCode) copyCodeLabel = labels.copyCode
+}
+
+const CODE_COPY_ICON = `
+  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+    <rect x="5.6" y="5.6" width="8" height="8.6" rx="1.6" stroke="currentColor" stroke-width="1.3" />
+    <path d="M10.4 5.6V3.6c0-.9-.7-1.6-1.6-1.6H3.6C2.7 2 2 2.7 2 3.6v5.2c0 .9.7 1.6 1.6 1.6h2"
+          stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+  </svg>`
+
+const CODE_DONE_ICON = `
+  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6"
+          stroke-linecap="round" stroke-linejoin="round" />
+  </svg>`
+
+/** 复制代码；成功后按钮短暂变成对勾 */
+function copyCode(text: string, button: HTMLButtonElement): void {
+  const done = (): void => {
+    button.classList.add('copied')
+    button.innerHTML = CODE_DONE_ICON
+    window.setTimeout(() => {
+      button.classList.remove('copied')
+      button.innerHTML = CODE_COPY_ICON
+    }, 1300)
+  }
+
+  const fallback = (): void => {
+    const scratch = document.createElement('textarea')
+    scratch.value = text
+    scratch.style.position = 'fixed'
+    scratch.style.opacity = '0'
+    document.body.appendChild(scratch)
+    scratch.select()
+    document.execCommand('copy')
+    scratch.remove()
+    done()
+  }
+
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback)
+  } else {
+    fallback()
+  }
+}
+
 const MATH_TAGS = new Set([
   'math',
   'semantics',
@@ -290,14 +340,49 @@ function cleanNode(node: Node): Node | null {
 
   if (element.classList.contains('ds-markdown-cite')) return cleanCitation(element)
 
-  // DeepSeek 的代码块外壳：只取里面的 pre
+  // DeepSeek 的代码块：还原顶部语言标签 + 只保留一个图标复制按钮
   if (element.classList.contains('md-code-block')) {
     const pre = element.querySelector('pre')
     if (!pre) return unwrap(element)
+
+    const banner = element.querySelector('.md-code-block-banner')
+    let language = (banner?.querySelector('span')?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (!language && banner) {
+      language = (banner.textContent || '')
+        .replace(/\b(复制|下载|Copy|Download)\b/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+    language = language.slice(0, 24)
+
     const wrap = document.createElement('div')
     wrap.className = 'md-code-block'
+
+    const head = document.createElement('div')
+    head.className = 'md-code-head'
+
+    const languageEl = document.createElement('span')
+    languageEl.className = 'md-code-lang'
+    languageEl.textContent = language
+    head.appendChild(languageEl)
+
+    const copyButton = document.createElement('button')
+    copyButton.type = 'button'
+    copyButton.className = 'md-code-copy'
+    copyButton.title = copyCodeLabel
+    copyButton.setAttribute('aria-label', copyCodeLabel)
+    copyButton.innerHTML = CODE_COPY_ICON
+    head.appendChild(copyButton)
+
+    wrap.appendChild(head)
+
     const cleanPre = cleanNode(pre)
-    if (cleanPre) wrap.appendChild(cleanPre)
+    if (cleanPre) {
+      wrap.appendChild(cleanPre)
+      copyButton.addEventListener('click', () => copyCode(cleanPre.textContent || '', copyButton))
+    }
     return wrap
   }
 
