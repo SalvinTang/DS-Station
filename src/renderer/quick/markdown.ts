@@ -43,7 +43,7 @@ export function setMarkdownLabels(labels: { copyCode: string }): void {
   if (labels.copyCode) copyCodeLabel = labels.copyCode
 }
 
-const CODE_COPY_ICON = `
+export const CODE_COPY_ICON = `
   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
     <rect x="5.6" y="5.6" width="8" height="8.6" rx="1.6" stroke="currentColor" stroke-width="1.3" />
     <path d="M10.4 5.6V3.6c0-.9-.7-1.6-1.6-1.6H3.6C2.7 2 2 2.7 2 3.6v5.2c0 .9.7 1.6 1.6 1.6h2"
@@ -57,6 +57,14 @@ const CODE_DONE_ICON = `
   </svg>`
 
 /** 复制代码；成功后按钮短暂变成对勾 */
+export function getCopyCodeLabel(): string {
+  return copyCodeLabel
+}
+
+export function attachCodeCopy(button: HTMLButtonElement, pre: HTMLElement): void {
+  button.addEventListener('click', () => copyCode(pre.textContent || '', button))
+}
+
 function copyCode(text: string, button: HTMLButtonElement): void {
   const done = (): void => {
     button.classList.add('copied')
@@ -381,7 +389,7 @@ function cleanNode(node: Node): Node | null {
     const cleanPre = cleanNode(pre)
     if (cleanPre) {
       wrap.appendChild(cleanPre)
-      copyButton.addEventListener('click', () => copyCode(cleanPre.textContent || '', copyButton))
+      attachCodeCopy(copyButton, cleanPre as HTMLElement)
     }
     return wrap
   }

@@ -259,8 +259,8 @@ body {
   overscroll-behavior: contain;
   /* 展开动画期间先藏起来，动画结束再淡入 */
   transition: opacity 0.22s ease;
-  /* 外框 1px 描边之内再留 17px，视觉上距窗口边缘 18px */
-  padding: 17px 17px 0;
+  /* 左右距窗口边缘 18px；顶部仍是 9px，保证正文从顶栏下方 10px 开始 */
+  padding: 9px 17px 0;
 }
 
 .app[data-mode='empty'] .messages {
@@ -584,6 +584,134 @@ body {
   object-fit: contain;
 }
 
+/* Markdown 任务列表 / 脚注 / 图片占位 */
+.md .task-list-item {
+  list-style: none;
+}
+
+.md .task-list-item-checkbox {
+  margin: 0 6px 0 -18px;
+  vertical-align: middle;
+  accent-color: var(--link);
+}
+
+.md .contains-task-list {
+  padding-left: 20px;
+}
+
+.md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--table-border);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--quote-fg);
+}
+
+.md .footnotes ol {
+  padding-left: 18px;
+}
+
+.md .footnotes li {
+  margin: 4px 0;
+}
+
+.md .footnote-ref a,
+.md .footnote-backref {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.md .md-image-alt {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px dashed var(--table-border);
+  border-radius: 4px;
+  color: var(--quote-fg);
+  font-size: 13px;
+}
+
+/* highlight.js 代码高亮 — 亮色 */
+.md .hljs-comment,
+.md .hljs-quote {
+  color: #6a737d;
+}
+.md .hljs-keyword,
+.md .hljs-selector-tag,
+.md .hljs-literal,
+.md .hljs-doctag {
+  color: #d73a49;
+}
+.md .hljs-string,
+.md .hljs-template-tag,
+.md .hljs-template-variable {
+  color: #032f62;
+}
+.md .hljs-number,
+.md .hljs-built_in,
+.md .hljs-symbol,
+.md .hljs-bullet {
+  color: #005cc5;
+}
+.md .hljs-title,
+.md .hljs-section {
+  color: #6f42c1;
+}
+.md .hljs-type,
+.md .hljs-name,
+.md .hljs-class .hljs-title {
+  color: #22863a;
+}
+.md .hljs-attr,
+.md .hljs-attribute {
+  color: #005cc5;
+}
+.md .hljs-variable,
+.md .hljs-params {
+  color: #24292e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .md .hljs-comment,
+  .md .hljs-quote {
+    color: #8b949e;
+  }
+  .md .hljs-keyword,
+  .md .hljs-selector-tag,
+  .md .hljs-literal,
+  .md .hljs-doctag {
+    color: #ff7b72;
+  }
+  .md .hljs-string,
+  .md .hljs-template-tag,
+  .md .hljs-template-variable {
+    color: #a5d6ff;
+  }
+  .md .hljs-number,
+  .md .hljs-built_in,
+  .md .hljs-symbol,
+  .md .hljs-bullet {
+    color: #79c0ff;
+  }
+  .md .hljs-title,
+  .md .hljs-section {
+    color: #d2a8ff;
+  }
+  .md .hljs-type,
+  .md .hljs-name,
+  .md .hljs-class .hljs-title {
+    color: #7ee787;
+  }
+  .md .hljs-attr,
+  .md .hljs-attribute {
+    color: #79c0ff;
+  }
+  .md .hljs-variable,
+  .md .hljs-params {
+    color: #c9d1d9;
+  }
+}
+
 /* 代码高亮（Prism token）— 亮色 */
 .md .token.comment,
 .md .token.prolog,
@@ -790,6 +918,40 @@ body {
   flex: none;
   height: 100px;
   margin-top: auto;
+}
+
+/* 历史消息按需加载时，顶部居中的三点等待 */
+.history-loader {
+  position: absolute;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.history-loader[hidden] {
+  display: none;
+}
+
+/* 缝隙只有 10px：这里去掉上下浮动，只做透明度呼吸，保证三个点始终居中 */
+.history-loader .thinking i {
+  animation-name: ds-breathe-loader;
+}
+
+@keyframes ds-breathe-loader {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+  }
+  35% {
+    opacity: 1;
+  }
 }
 
 /* ── 历史对话弹框 ─────────────────────────────────────────── */

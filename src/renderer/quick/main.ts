@@ -8,11 +8,13 @@
 
 import type {
   HistoryEntry,
+  HistoryMessage,
   QuickEvent,
   QuickMode,
   QuickSubmitPayload,
 } from '../../shared/types'
 import { renderAiContent, setMarkdownLabels } from './markdown'
+import { clearMarkdownCache, renderApiMarkdown } from './markdown-render'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
@@ -30,6 +32,9 @@ const TOPBAR_HIDE_DELAY = 1000
 const TOPBAR_HEIGHT = 40
 const MESSAGE_TOP_GAP = 10
 const MESSAGE_TOP_ANCHOR = TOPBAR_HEIGHT + MESSAGE_TOP_GAP
+
+/** 离顶部多少像素内就提前加载更早的历史 */
+const OLDER_TRIGGER = 150
 /**
  * 补位空间多留一点富余：等待回答的呼吸点只有几像素高，
  * 回答开始时它会被移除，若可滚动高度刚好卡满，scrollTop 会被浏览器夹一下，
@@ -133,6 +138,7 @@ const historyLabel = document.getElementById('historyLabel')
 const historyPanel = document.getElementById('historyPanel') as HTMLElement
 const historyList = document.getElementById('historyList') as HTMLElement
 const historyEmpty = document.getElementById('historyEmpty') as HTMLElement
+const historyLoader = document.getElementById('historyLoader') as HTMLElement
 
 const tbClose = document.getElementById('tbClose')
 const tbNewChat = document.getElementById('tbNewChat')
@@ -149,6 +155,22 @@ let historyLoadPending = false
 let historyLoading = false
 /** 历史对话加载后的落点，等布局稳定（字体/图片/窗口动画）再对齐一次 */
 let historyLandingGroup: HTMLElement | null = null
+/** 窗口展开动画期间还有历史落点要在动画结束后校正 */
+let historyLandingPending = false
+/** 接口返回的完整历史（只渲染首屏需要的部分，其余留在内存里） */
+let historyAllMessages: HistoryMessage[] | null = null
+/** 历史首屏渲染的世代号，切换会话后让旧的延迟渲染失效 */
+let historyRenderEpoch = 0
+/** 首屏两页缓冲正在后台渲染，避免和用户滚动触发的懒加载并发 */
+let historyPrefillRunning = false
+/** historyAllMessages 里当前已经渲染到第几条 */
+let historyRenderedStart = 0
+/** 历史对话是否还有更早的消息可以加载 */
+let historyHasOlder = false
+/** 正在加载更早的历史消息 */
+let historyOlderLoading = false
+/** 用户已经主动滚动过，才允许触发按需加载 */
+let historyLazyArmed = false
 /** 已经渲染过的历史条目，用来去重 */
 const historySeen = new Set<string>()
 /** 拖动窗口：按下时的鼠标屏幕坐标 */
@@ -482,7 +504,13 @@ async function copyText(text: string, button: HTMLButtonElement): Promise<void> 
   focusInput()
 }
 
-function appendMessage(kind: 'user' | 'ai', text: string, html?: string): HTMLElement {
+function buildMessageGroup(
+  kind: 'user' | 'ai',
+  text: string,
+  html?: string,
+  markdown?: string,
+  messageKey?: string,
+): { group: HTMLElement; body: HTMLElement } {
   const group = document.createElement('div')
   group.className = 'msg-group'
 
@@ -491,7 +519,11 @@ function appendMessage(kind: 'user' | 'ai', text: string, html?: string): HTMLEl
 
   const body = group.querySelector(kind === 'user' ? '.bubble' : '.body') as HTMLElement
   if (kind === 'ai') {
-    renderAiContent(body, text, html)
+    if (markdown) {
+      renderApiMarkdown(body, markdown, messageKey)
+    } else {
+      renderAiContent(body, text, html)
+    }
   } else {
     body.textContent = text
   }
@@ -499,9 +531,170 @@ function appendMessage(kind: 'user' | 'ai', text: string, html?: string): HTMLEl
   const actions = group.querySelector('.msg-actions') as HTMLElement
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
 
+  return { group, body }
+}
+
+function appendMessage(
+  kind: 'user' | 'ai',
+  text: string,
+  html?: string,
+  markdown?: string,
+  messageKey?: string,
+): HTMLElement {
+  const { group, body } = buildMessageGroup(kind, text, html, markdown, messageKey)
   messagesInner.appendChild(group)
   updateScrollButton()
   return body
+}
+
+/**
+ * 把更早的历史消息插到列表顶部。
+ * 插入前后补滚动高度，保证用户当前看到的内容不跳。
+ */
+function prependMessages(history: HistoryMessage[]): void {
+  if (!history.length) return
+
+  const oldHeight = messages.scrollHeight
+  const oldTop = messages.scrollTop
+
+  const fragment = document.createDocumentFragment()
+  for (const message of history) {
+    const { group } = buildMessageGroup(
+      message.role === 'user' ? 'user' : 'ai',
+      message.text,
+      message.html,
+      message.markdown,
+    )
+    fragment.appendChild(group)
+  }
+  messagesInner.insertBefore(fragment, messagesInner.firstChild)
+
+  messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+  updateScrollButton()
+}
+
+/** 消息区一页的高度（动态，跟随窗口大小） */
+function historyPageHeight(): number {
+  return Math.max(200, messages.clientHeight || 400)
+}
+
+function prependOneHistoryMessage(message: HistoryMessage): void {
+  const { group } = buildMessageGroup(
+    message.role === 'user' ? 'user' : 'ai',
+    message.text,
+    message.html,
+    message.markdown,
+    message.key,
+  )
+  messagesInner.insertBefore(group, messagesInner.firstChild)
+}
+
+/**
+ * 接口历史首屏渲染：
+ * 先完整渲染最后一组问答；如果不足两页，再向上补更早的消息到两页。
+ */
+function renderApiHistoryInitial(
+  all: HistoryMessage[],
+): { all: HistoryMessage[]; lastUser: number } {
+  historyAllMessages = all
+
+  let lastUser = -1
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    if (all[i].role === 'user') {
+      lastUser = i
+      break
+    }
+  }
+  if (lastUser < 0) lastUser = Math.max(0, all.length - 1)
+
+  // 第一阶段：只渲染最后一组；更早的两页缓冲等首屏画完再补
+  for (let i = lastUser; i < all.length; i += 1) {
+    const message = all[i]
+    appendMessage(
+      message.role === 'user' ? 'user' : 'ai',
+      message.text,
+      message.html,
+      message.markdown,
+      message.key,
+    )
+  }
+
+  historyRenderedStart = lastUser
+  historyHasOlder = lastUser > 0
+  return { all, lastUser }
+}
+
+/**
+ * 第二阶段：首屏画完后，在后台把更早的两页缓冲补到顶部。
+ * 每次 prepend 都补偿滚动高度，最后一条用户消息保持在原来的位置。
+ */
+function renderApiHistoryOlderBuffer(epoch: number, all: HistoryMessage[], lastUser: number): void {
+  if (epoch !== historyRenderEpoch || historyAllMessages !== all) {
+    historyPrefillRunning = false
+    return
+  }
+
+  const limit = historyPageHeight() * 2
+  let renderedStart = lastUser
+
+  while (renderedStart > 0 && messagesInner.offsetHeight < limit) {
+    const index = renderedStart - 1
+    const oldHeight = messages.scrollHeight
+    const oldTop = messages.scrollTop
+    prependOneHistoryMessage(all[index])
+    messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+    renderedStart = index
+  }
+
+  historyRenderedStart = renderedStart
+  historyHasOlder = renderedStart > 0
+  historyPrefillRunning = false
+  updateScrollButton()
+}
+
+/** 从内存里的完整历史中，向上渲染一批（一页） */
+function renderOlderFromMemory(): void {
+  const all = historyAllMessages
+  if (!all || historyRenderedStart <= 0) {
+    historyHasOlder = false
+    historyOlderLoading = false
+    historyLoader.hidden = true
+    return
+  }
+
+  const page = historyPageHeight()
+  const oldHeight = messages.scrollHeight
+  const oldTop = messages.scrollTop
+  let start = historyRenderedStart
+
+  while (start > 0) {
+    const index = start - 1
+    prependOneHistoryMessage(all[index])
+    start = index
+    if (messages.scrollHeight - oldHeight >= page) break
+  }
+
+  historyRenderedStart = start
+  messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+  historyHasOlder = start > 0
+  historyOlderLoading = false
+  historyLoader.hidden = true
+  updateScrollButton()
+}
+
+/** 滚到顶部后按需加载更早的一批消息 */
+function requestOlderHistory(): void {
+  if (!historyHasOlder || historyOlderLoading || historyPrefillRunning) return
+  historyOlderLoading = true
+  historyLoader.hidden = false
+
+  if (historyAllMessages) {
+    // 接口路径：数据都在内存里，只差渲染
+    requestAnimationFrame(() => renderOlderFromMemory())
+    return
+  }
+
+  window.ds?.loadOlderQuickHistory()
 }
 
 function addThinking(): void {
@@ -523,6 +716,14 @@ function removeThinking(): void {
 
 function clearMessages(): void {
   historyLandingGroup = null
+  historyHasOlder = false
+  historyOlderLoading = false
+  historyLazyArmed = false
+  historyAllMessages = null
+  historyRenderedStart = 0
+  historyPrefillRunning = false
+  historyLandingPending = false
+  historyLoader.hidden = true
   messagesInner.replaceChildren()
   messagesTail.style.height = '0px'
   streamingBody = null
@@ -753,10 +954,22 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       // 展开动画结束，内容淡入
       app.classList.remove('content-enter')
       placeMessagesFade()
+
+      // 历史对话的落点：窗口动画结束后再精确对齐一次最后一条用户消息
+      if (historyLandingPending && mode === 'content') {
+        const users = messagesInner.querySelectorAll('.msg-user')
+        const lastUser = users[users.length - 1] as HTMLElement | undefined
+        const group = lastUser?.closest('.msg-group') as HTMLElement | null
+        if (group) alignMessageToTop(group, false)
+        updateScrollButton()
+        historyLandingPending = false
+      }
       break
     }
 
     case 'conversation-cleared': {
+      // 退出登录：释放历史对话的 Markdown HTML 缓存
+      clearMarkdownCache()
       resetToEmpty()
       break
     }
@@ -792,6 +1005,12 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       clearMessages()
       addThinking()
       historyLoading = true
+      historyHasOlder = false
+      historyOlderLoading = false
+      historyLazyArmed = false
+      historyAllMessages = null
+      historyRenderedStart = 0
+      historyLoader.hidden = true
       busy = false
       stopping = false
       syncSendState()
@@ -800,15 +1019,40 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
 
     case 'history-loaded': {
       removeThinking()
+      historyLoader.hidden = true
+      historyRenderEpoch += 1
       clearMessages()
-      for (const message of event.messages) {
-        appendMessage(
-          message.role === 'user' ? 'user' : 'ai',
-          message.text,
-          message.html,
-        )
+      historyAllMessages = null
+      historyRenderedStart = 0
+      historyPrefillRunning = false
+
+      if (event.source === 'api') {
+        const plan = renderApiHistoryInitial(event.messages)
+        const epoch = historyRenderEpoch
+        historyPrefillRunning = true
+        // 双 rAF：先让最后一组完成一次绘制，再补两页缓冲
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            renderApiHistoryOlderBuffer(epoch, plan.all, plan.lastUser)
+          })
+        })
+      } else {
+        for (const message of event.messages) {
+          appendMessage(
+            message.role === 'user' ? 'user' : 'ai',
+            message.text,
+            message.html,
+            message.markdown,
+            message.key,
+          )
+        }
+        historyHasOlder = event.hasOlder
       }
+
       historyLoading = false
+      historyOlderLoading = false
+      historyLazyArmed = false
+      historyLandingPending = true
       busy = false
       stopping = false
       syncSendState()
@@ -840,6 +1084,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
             alignMessageToTop(landingGroup, false)
             updateScrollButton()
             historyLandingGroup = null
+            historyLandingPending = false
           }, 450)
         } else {
           messages.scrollTop = messages.scrollHeight
@@ -847,6 +1092,14 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         updateScrollButton()
         focusInput()
       })
+      break
+    }
+
+    case 'history-prepended': {
+      prependMessages(event.messages)
+      historyHasOlder = event.hasOlder
+      historyOlderLoading = false
+      historyLoader.hidden = true
       break
     }
 
@@ -908,12 +1161,45 @@ messagesInner.addEventListener('click', (event) => {
   const link = target?.closest('a')
   if (!link) return
   event.preventDefault()
-  const href = link.getAttribute('href')
+  const href = link.getAttribute('href') || ''
+  if (href.startsWith('#')) {
+    // Markdown 脚注等站内锚点：在消息区内滚动过去
+    try {
+      const dest = messagesInner.querySelector(href)
+      dest?.scrollIntoView({ block: 'center' })
+    } catch {
+      // 非法选择器忽略
+    }
+    return
+  }
   if (href) window.ds?.openExternal(href)
 })
 
-// 滚动时更新「滚动到底部」按钮；内容/可视区尺寸变化时也要更新
-messages.addEventListener('scroll', updateScrollButton, { passive: true })
+// 滚动时更新「滚动到底部」按钮；滚到历史顶部时按需加载更早消息
+messages.addEventListener('scroll', () => {
+  updateScrollButton()
+  if (
+    historyLazyArmed &&
+    historyHasOlder &&
+    !historyOlderLoading &&
+    messages.scrollTop <= 24
+  ) {
+    requestOlderHistory()
+  }
+}, { passive: true })
+
+// 触控板/鼠标向上滑到顶：加载更早的消息
+messages.addEventListener('wheel', (event) => {
+  if (event.deltaY >= 0) return
+  if (messages.scrollTop > OLDER_TRIGGER) return
+  historyLazyArmed = true
+  requestOlderHistory()
+}, { passive: true })
+
+// 拖滚动条/键盘滚动时，先标记用户主动滚动过
+messages.addEventListener('pointerdown', () => {
+  historyLazyArmed = true
+}, { passive: true })
 messages.addEventListener(
   'scrollend',
   () => {
