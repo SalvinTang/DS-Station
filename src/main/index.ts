@@ -5,6 +5,7 @@ import { DEEPSEEK_URL } from '../shared/constants'
 import { translate, type Language } from '../shared/i18n'
 import type {
   HistoryEntry,
+  HistoryMessage,
   HotkeyUpdateResult,
   QuickMode,
   QuickSubmitPayload,
@@ -108,6 +109,9 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     mainWindow = new MainWindow()
+    mainWindow.pageView.webContents.on('dom-ready', () => {
+      void new DeepSeekPage(mainWindow!.pageView).installApiHeaderHook()
+    })
 
     createTray({ showMainWindow: () => mainWindow?.show() })
 
@@ -223,6 +227,11 @@ if (!app.requestSingleInstanceLock()) {
       runHistorySelfCheck(mainWindow, quickWindow)
     }
 
+    // 接口 Markdown 渲染自检
+    if (process.env.DS_API_MD_TEST === '1') {
+      runApiMarkdownSelfCheck(quickWindow)
+    }
+
     // Markdown 渲染自检：注入一段含代码/表格/公式/链接的 HTML，截图验证
     if (process.env.DS_MD_UI_TEST === '1') {
       runMarkdownUiSelfCheck(quickWindow)
@@ -330,10 +339,7 @@ function registerIpcHandlers(): void {
   ipcMain.on('ds:quick-new-chat', () => void startNewChatOnPage())
 
   ipcMain.on('ds:quick-expand', () => {
-    // 设计稿：扩大 = 切到主窗口，快捷窗口关闭。
-    // 因为两边本来就是同一个对话线程（决策 D1），所以不需要"搬运"任何东西。
-    quickWindow?.hide()
-    mainWindow?.show()
+    void handleQuickExpand()
   })
 
   ipcMain.on('ds:quick-submit', (_event, payload: QuickSubmitPayload) => {
@@ -350,6 +356,7 @@ function registerIpcHandlers(): void {
   ipcMain.on('ds:quick-history-select', (_event, id: unknown) => {
     if (typeof id === 'string') void handleHistorySelect(id)
   })
+  ipcMain.on('ds:quick-history-older', () => void handleHistoryOlder())
 }
 
 // ── 设置 ────────────────────────────────────────────────────────
@@ -460,9 +467,17 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
      * 刚启动时页面可能还没就绪，所以输入框用重试的方式等它出现。
      */
     if (payload.startNewChat) {
+      activeHistoryId = null
       const started = await page.startNewChat()
       console.log(`[快捷窗口] 空态发送，开新对话 → ${started ? '成功' : '没找到按钮，直接发'}`)
       await delay(600)
+    } else if (activeHistoryId) {
+      // 历史预览阶段没有切主页面，真正发消息前把页面切到这条会话
+      const target = activeHistoryId
+      activeHistoryId = null
+      const switched = await page.switchToHistory(target)
+      if (!switched) throw new Error('切换历史对话失败，请重新选择')
+      await delay(300)
     }
 
     await page.setSwitch('deepThinkToggle', payload.deepThink)
@@ -627,6 +642,12 @@ async function handleContinueGeneration(): Promise<void> {
 let historyPanelOpen = false
 let historyLoadingMore = false
 let historySentIds = new Set<string>()
+let historyOldestKey: string | null = null
+let historyOlderLoading = false
+/** 当前快捷窗口正在预览的历史会话（预览阶段不切主页面） */
+let activeHistoryId: string | null = null
+/** 历史选择请求序号：连续点击时只让最后一次生效 */
+let historySelectEpoch = 0
 
 async function handleHistoryToggle(open: boolean): Promise<void> {
   const win = mainWindow
@@ -709,26 +730,110 @@ async function handleHistorySelect(id: string): Promise<void> {
   if (!win || !quick) return
   if (activeToken) return
 
+  const epoch = ++historySelectEpoch
+  activeHistoryId = null
   historyPanelOpen = false
   // 空态点历史时窗口是临时撑高的，切到有内容态会重新算尺寸
   quick.setMode('content')
   quick.sendEvent({ type: 'history-panel', open: false })
   quick.sendEvent({ type: 'history-start' })
 
+  historyOldestKey = null
+  historyOlderLoading = false
+
+  const started = Date.now()
   const page = new DeepSeekPage(win.pageView)
-  const messages = await page.openHistory(id)
+  let messages: HistoryMessage[] | null = null
+  let hasOlder = false
+  let source = 'api'
+
+  // 一步到位：优先用接口拿完整对话，自己渲染 Markdown
+  messages = await page.openHistoryViaApi(id)
+  if (epoch !== historySelectEpoch) return
+
+  if (!messages) {
+    source = 'dom'
+    const result = await page.openHistoryLastExchange(id)
+    if (epoch !== historySelectEpoch) return
+    if (result) {
+      messages = result.messages
+      hasOlder = result.hasOlder
+    }
+  }
+
+  // 最后一段加载失败时退回全量，保证至少能看
+  if (!messages) {
+    source = 'dom-full'
+    messages = await page.openHistory(id)
+    if (epoch !== historySelectEpoch) return
+    hasOlder = false
+  }
+
+  console.log(
+    `[快捷窗口] 历史加载耗时 ${Date.now() - started}ms，消息 ${messages?.length ?? 0} 条，来源=${source}，hasOlder=${hasOlder}`,
+  )
 
   if (!messages) {
     quick.sendEvent({ type: 'error', message: '打不开这个历史对话，稍后再试' })
     return
   }
-  quick.sendEvent({ type: 'history-loaded', messages })
+
+  if (epoch !== historySelectEpoch) return
+
+  historyOldestKey = messages[0]?.key ?? null
+  activeHistoryId = id
+  quick.sendEvent({ type: 'history-loaded', messages, hasOlder, source: source === 'api' ? 'api' : 'dom' })
+}
+
+/** 滚到顶部后，继续加载更早的一批消息 */
+async function handleHistoryOlder(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick || historyOlderLoading) return
+
+  historyOlderLoading = true
+  const epoch = historySelectEpoch
+  try {
+    const page = new DeepSeekPage(win.pageView)
+    const result = await page.loadOlderHistory(historyOldestKey)
+    if (epoch !== historySelectEpoch) return
+    if (!result) {
+      quick.sendEvent({ type: 'history-prepended', messages: [], hasOlder: false })
+      return
+    }
+    if (result.messages.length) {
+      historyOldestKey = result.messages[0]?.key ?? historyOldestKey
+    }
+    quick.sendEvent({
+      type: 'history-prepended',
+      messages: result.messages,
+      hasOlder: result.hasOlder,
+    })
+  } finally {
+    historyOlderLoading = false
+  }
+}
+
+/** 扩大：先确保主页面已经切到当前预览的历史会话，再显示主窗口 */
+async function handleQuickExpand(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (activeHistoryId && win) {
+    const target = activeHistoryId
+    activeHistoryId = null
+    const page = new DeepSeekPage(win.pageView)
+    await page.switchToHistory(target).catch(() => false)
+  }
+  quick?.hide()
+  win?.show()
 }
 
 /** 让 DeepSeek 网页开一个新对话，并把面板收回空态 */
 async function startNewChatOnPage(): Promise<void> {
   const win = mainWindow
   if (!win) return
+
+  activeHistoryId = null
 
   // 如果上一轮还在生成，先让它停下来，避免旧轮询继续读新会话
   if (activeToken) activeToken.cancelled = true
@@ -1442,6 +1547,7 @@ function runScrollSelfCheck(quick: QuickWindow | null): void {
         { role: 'user', text: '历史里的最后一问' },
         { role: 'ai', text: '这是一段很长的历史回答。'.repeat(80) },
       ],
+      hasOlder: false,
     })
   }, 7600)
   setTimeout(() => {
@@ -1534,7 +1640,8 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         await log('加载更多', `({ items: document.querySelectorAll('.history-item').length })`)
 
         // 选第一条历史对话
-        await run(`(() => { const items = [...document.querySelectorAll('.history-item')]; const hit = items.find((el) => (el.textContent || '').includes('知名')); (hit || items[0])?.click(); return !!hit; })()`)
+        const urlBefore = win.pageView.webContents.getURL()
+        await run(`(() => { const items = [...document.querySelectorAll('.history-item')]; const hit = items.find((el) => (el.textContent || '').includes('回复样式')); (hit || items[0])?.click(); return !!hit; })()`)
         await new Promise((resolve) => setTimeout(resolve, 6500))
         await log('对话', conversationState)
         await shot('content')
@@ -1615,6 +1722,25 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         await new Promise((resolve) => setTimeout(resolve, 400))
         await shot('md-block')
 
+        // 首屏 2 页 + 内存懒加载
+        const groupsBefore = await run(`document.querySelectorAll('.msg-group').length`)
+        await run(`(() => {
+          const m = document.getElementById('messages');
+          m.scrollTop = 100;
+          m.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }));
+          return true;
+        })()`)
+        await new Promise((resolve) => setTimeout(resolve, 900))
+        const groupsAfter = await run(`(() => ({
+          groups: document.querySelectorAll('.msg-group').length,
+          loaderHidden: document.getElementById('historyLoader').hidden,
+        }))()`)
+        console.log(
+          '[历史测试] 内存懒加载:',
+          JSON.stringify({ before: groupsBefore, after: groupsAfter }),
+        )
+        console.log('[历史测试] 预览是否切页:', JSON.stringify({ before: urlBefore, after: win.pageView.webContents.getURL() }))
+
         // 代码块复制按钮：用真实鼠标事件点击，读剪贴板验证
         const previousClipboard = await clipboard.readText()
         const point = (await run(`(() => {
@@ -1657,6 +1783,15 @@ function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null):
         await new Promise((resolve) => setTimeout(resolve, 1800))
         await log('内容态弹框', listState)
         await shot('content-history')
+
+        // 扩大：应该先把主页面切到当前预览的历史会话，再显示主窗口
+        const urlBeforeExpand = win.pageView.webContents.getURL()
+        await run(`document.getElementById('tbExpand')?.click()`)
+        await new Promise((resolve) => setTimeout(resolve, 1600))
+        console.log(
+          '[历史测试] 扩大切换:',
+          JSON.stringify({ before: urlBeforeExpand, after: win.pageView.webContents.getURL() }),
+        )
         process.exit(0)
       })()
     })
@@ -1703,6 +1838,7 @@ function runMarkdownUiSelfCheck(quick: QuickWindow | null): void {
         { role: 'user', text: '代码和高亮测试' },
         { role: 'ai', text: '示例', html: sample },
       ],
+      hasOlder: false,
     })
   }, 2600)
 
@@ -1752,4 +1888,83 @@ function runMarkdownUiSelfCheck(quick: QuickWindow | null): void {
         setTimeout(() => process.exit(0), 400)
       })
   }, 3400)
+}
+
+
+/** 自检：接口 Markdown 渲染（标题/列表/任务/表格/代码/公式/引用/脚注） */
+function runApiMarkdownSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+  const sample = [
+    '## 标题',
+    '',
+    '**加粗** *斜体* ~~删除线~~ [citation:1] [reference:2]',
+    '',
+    '- 无序列表',
+    '- [x] 已完成任务',
+    '',
+    '> 一段引用',
+    '',
+    '| 列一 | 列二 |',
+    '|---|---|',
+    '| 内容 | 值 |',
+    '',
+    '```js',
+    'const answer = 42;',
+    'console.log(answer);',
+    '```',
+    '',
+    '行内公式 $E=mc^2$',
+    '',
+    '\\[',
+    '\\frac{1}{2}',
+    '\\]',
+    '',
+    '脚注[^1]',
+    '',
+    '[^1]: 这是脚注内容',
+  ].join('\n')
+
+  setTimeout(() => quick.show(), 1200)
+  setTimeout(() => quick.setMode('content'), 2000)
+  setTimeout(() => {
+    quick.sendEvent({
+      type: 'history-loaded',
+      messages: [
+        { role: 'user', text: 'Markdown 渲染测试' },
+        { role: 'ai', text: '', markdown: sample },
+      ],
+      hasOlder: false,
+    })
+  }, 2600)
+
+  setTimeout(() => {
+    void quick.window.webContents
+      .executeJavaScript(
+        `(() => ({
+          katex: document.querySelectorAll('.md .katex').length,
+          cites: document.querySelectorAll('.md .md-cite').length,
+          tables: document.querySelectorAll('.md table').length,
+          codeBlocks: document.querySelectorAll('.md .md-code-block').length,
+          codeCopies: document.querySelectorAll('.md .md-code-copy').length,
+          tasks: document.querySelectorAll('.md .task-list-item').length,
+          checkboxes: document.querySelectorAll('.md .task-list-item-checkbox').length,
+          footnotes: document.querySelectorAll('.md .footnotes').length,
+          headings: document.querySelectorAll('.md h2').length,
+          lists: document.querySelectorAll('.md ul').length,
+          quote: document.querySelectorAll('.md blockquote').length,
+        }))()`,
+      )
+      .then(async (state) => {
+        console.log('[API MD测试] ' + JSON.stringify(state))
+        try {
+          writeFileSync(
+            '/tmp/ds-api-md.png',
+            (await quick.window.webContents.capturePage()).toPNG(),
+          )
+        } catch (error) {
+          console.log('[API MD测试] 截图失败:', String(error))
+        }
+        process.exit(0)
+      })
+  }, 3600)
 }

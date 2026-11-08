@@ -36,6 +36,7 @@ const api: DsApi = {
   toggleQuickHistory: (open: boolean) => ipcRenderer.send('ds:quick-history-toggle', open),
   loadMoreQuickHistory: () => ipcRenderer.send('ds:quick-history-more'),
   selectQuickHistory: (id: string) => ipcRenderer.send('ds:quick-history-select', id),
+  loadOlderQuickHistory: () => ipcRenderer.send('ds:quick-history-older'),
   setQuickMode: (mode: QuickMode) => ipcRenderer.send('ds:quick-mode', mode),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),

@@ -17,6 +17,10 @@ export interface HistoryMessage {
   role: 'user' | 'ai'
   text: string
   html?: string
+  /** 接口返回的原始 Markdown（历史对话走接口时使用） */
+  markdown?: string
+  /** 页面虚拟列表的消息 key，用于继续加载更早的消息 */
+  key?: string
 }
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
@@ -47,8 +51,10 @@ export type QuickEvent =
   | { type: 'history-list'; items: HistoryEntry[]; append: boolean; hasMore: boolean }
   /** 正在从 DeepSeek 页面加载选中的历史对话 */
   | { type: 'history-start' }
-  /** 历史对话加载完成 */
-  | { type: 'history-loaded'; messages: HistoryMessage[] }
+  /** 历史对话加载完成：只包含最后一段完整问答 */
+  | { type: 'history-loaded'; messages: HistoryMessage[]; hasOlder: boolean; source?: 'api' | 'dom' }
+  /** 按需加载的更早历史消息（prepend 到列表顶部） */
+  | { type: 'history-prepended'; messages: HistoryMessage[]; hasOlder: boolean }
 
 export interface QuickSubmitPayload {
   text: string
@@ -137,6 +143,9 @@ export interface DsApi {
 
   /** 选了某条历史对话 */
   selectQuickHistory: (id: string) => void
+
+  /** 滚到历史消息顶部时，请求更早的一批消息 */
+  loadOlderQuickHistory: () => void
 
   /** 切换窗口形态：空态 ↔ 有内容 */
   setQuickMode: (mode: QuickMode) => void

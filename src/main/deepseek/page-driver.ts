@@ -517,12 +517,209 @@ export class DeepSeekPage {
   }
 
   /**
-   * 打开一条历史对话，并读回它最下方当前渲染出来的消息。
-   *
-   * 对话区是虚拟列表：只保留视口附近的消息，所以先滚到最底部，
-   * 再读渲染出来的那一批 —— 也正好符合设计稿「显示最下方内容」。
+   * 安装一次性的请求头拦截：
+   * 页面里任何带 authorization 的 XHR/fetch 都会把 headers 缓存到 window.__dsApiHeaders。
+   * 只装一次，缓存只有一个对象，不会按对话累积。
    */
-  async openHistory(id: string): Promise<HistoryMessage[] | null> {
+  async installApiHeaderHook(): Promise<void> {
+    await this.run(`
+      if (!window.__dsHeaderHook) {
+        window.__dsHeaderHook = true;
+        window.__dsApiHeaders = window.__dsApiHeaders || null;
+        const capture = (headers) => {
+          if (!headers) return;
+          const list = {};
+          try {
+            if (Array.isArray(headers)) {
+              for (const pair of headers) {
+                if (pair && pair.length >= 2) list[String(pair[0])] = String(pair[1]);
+              }
+            } else if (typeof headers.forEach === 'function') {
+              headers.forEach(function (value, key) { list[String(key)] = String(value); });
+            } else {
+              for (const key of Object.keys(headers)) list[key] = String(headers[key]);
+            }
+          } catch (e) {
+            return;
+          }
+          let auth = '';
+          for (const key of Object.keys(list)) {
+            if (key.toLowerCase() === 'authorization') { auth = list[key]; break; }
+          }
+          if (!auth) return;
+          window.__dsApiHeaders = list;
+        };
+
+        const origOpen = XMLHttpRequest.prototype.open;
+        const origSet = XMLHttpRequest.prototype.setRequestHeader;
+        const origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function (method, url) {
+          this.__dsUrl = url;
+          this.__dsHeaders = {};
+          return origOpen.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
+          if (!this.__dsHeaders) this.__dsHeaders = {};
+          this.__dsHeaders[name] = value;
+          return origSet.apply(this, arguments);
+        };
+        XMLHttpRequest.prototype.send = function () {
+          capture(this.__dsHeaders);
+          return origSend.apply(this, arguments);
+        };
+
+        const origFetch = window.fetch;
+        if (origFetch) {
+          window.fetch = function (input, init) {
+            if (init && init.headers) capture(init.headers);
+            return origFetch.apply(this, arguments);
+          };
+        }
+      }
+      return true;
+    `)
+  }
+
+  /** 把主页面切到指定会话（历史预览时不切，真正发消息/扩大时才调） */
+  async switchToHistory(id: string): Promise<boolean> {
+    return this.openConversation(id)
+  }
+
+  /**
+   * 直接用页面自己的 history_messages 接口拉整段对话。
+   *
+   * 优先复用已经缓存的请求头，不再点会话；
+   * 只有第一次没有缓存时才点一下会话、短暂等页面自己发请求来拿 headers。
+   */
+  async openHistoryViaApi(id: string): Promise<HistoryMessage[] | null> {
+    await this.installApiHeaderHook()
+
+    const clickTarget = (): Promise<boolean | null> =>
+      this.run<boolean>(`
+        const target = ${JSON.stringify(id)};
+        const link = Array.from(document.querySelectorAll('a[href^="/a/chat/s/"]')).find((a) => {
+          const href = a.getAttribute('href') || '';
+          return href.split('/').filter(Boolean).pop() === target;
+        });
+        if (!link) return false;
+        link.scrollIntoView({ block: 'nearest' });
+        link.click();
+        return true;
+      `)
+
+    const waitHeaders = async (timeoutMs: number): Promise<boolean> => {
+      const attempts = Math.ceil(timeoutMs / 100)
+      for (let i = 0; i < attempts; i += 1) {
+        const headers = await this.run<Record<string, string> | null>(`
+          return window.__dsApiHeaders || null;
+        `)
+        if (headers) return true
+        await delay(100)
+      }
+      return false
+    }
+
+    let headers = await this.run<Record<string, string> | null>(`
+      return window.__dsApiHeaders || null;
+    `)
+    let navigated = false
+
+    if (!headers) {
+      if ((await clickTarget()) !== true) return null
+      navigated = true
+      if (!(await waitHeaders(1500))) return null
+    }
+
+    const fetchMessages = async (): Promise<{
+      messages?: HistoryMessage[]
+      error?: string
+      authError?: boolean
+    }> => {
+      return (
+        (await this.run<{
+          messages?: HistoryMessage[]
+          error?: string
+          authError?: boolean
+        }>(`
+          return (async () => {
+            try {
+              const headers = window.__dsApiHeaders || null;
+              if (!headers) return { error: 'no headers' };
+              const url = '/api/v0/chat/history_messages?chat_session_id=' + encodeURIComponent(${JSON.stringify(id)});
+              const resp = await fetch(url, { credentials: 'include', headers });
+              if (!resp.ok) return { error: 'http ' + resp.status };
+              const json = await resp.json();
+              if (json && json.code === 40003) return { authError: true, error: 'invalid token' };
+              const data = json && json.data && json.data.biz_data;
+              if (!data || !Array.isArray(data.chat_messages)) {
+                return { error: 'bad payload code=' + (json && json.code) + ' msg=' + (json && json.msg) };
+              }
+              let source = data.chat_messages;
+              const currentId = data.chat_session && data.chat_session.current_message_id;
+              if (currentId !== undefined && currentId !== null) {
+                const byId = new Map(source.map((message) => [String(message.message_id), message]));
+                const chain = [];
+                const seen = new Set();
+                let cursor = byId.get(String(currentId));
+                while (cursor && !seen.has(String(cursor.message_id))) {
+                  seen.add(String(cursor.message_id));
+                  chain.push(cursor);
+                  const parent = cursor.parent_id;
+                  cursor = parent !== undefined && parent !== null ? byId.get(String(parent)) : undefined;
+                }
+                if (chain.length) source = chain.reverse();
+              }
+              const out = [];
+              for (const message of source) {
+                const fragments = message.fragments || [];
+                if (message.role === 'USER') {
+                  const request = fragments
+                    .filter((fragment) => fragment.type === 'REQUEST' && typeof fragment.content === 'string')
+                    .map((fragment) => fragment.content)
+                    .join('')
+                    .trim();
+                  if (request) out.push({ role: 'user', text: request, key: String(message.message_id) });
+                  continue;
+                }
+                const response = fragments
+                  .filter(
+                    (fragment) =>
+                      fragment.type === 'RESPONSE' &&
+                      typeof fragment.content === 'string' &&
+                      fragment.content.trim(),
+                  )
+                  .map((fragment) => fragment.content)
+                  .join(String.fromCharCode(10, 10))
+                  .trim();
+                if (!response) continue;
+                out.push({ role: 'ai', text: response, markdown: response, key: String(message.message_id) });
+              }
+              return { messages: out };
+            } catch (error) {
+              return { error: String(error) };
+            }
+          })();
+        `)) ?? { error: 'script failed' }
+      )
+    }
+
+    let result = await fetchMessages()
+
+    // 缓存的 token 过期：清掉，重新从页面请求里抓一次，再试一次
+    if (result.authError) {
+      await this.run(`window.__dsApiHeaders = null; return true;`)
+      if (!navigated) {
+        if ((await clickTarget()) !== true) return null
+        navigated = true
+      }
+      if (!(await waitHeaders(1500))) return null
+      result = await fetchMessages()
+    }
+
+    return result.messages ?? null
+  }
+
+  private async openConversation(id: string): Promise<boolean> {
     const clicked = await this.run<boolean>(`
       const target = ${JSON.stringify(id)};
       const anchors = Array.from(document.querySelectorAll('a[href^="/a/chat/s/"]'));
@@ -535,10 +732,9 @@ export class DeepSeekPage {
       link.click();
       return true;
     `)
-    if (clicked !== true) return null
+    if (clicked !== true) return false
 
     const deadline = Date.now() + 15000
-    let ready = false
     while (Date.now() < deadline) {
       const state = await this.run<{ path: string; count: number }>(`
         return {
@@ -546,22 +742,15 @@ export class DeepSeekPage {
           count: document.querySelectorAll('.ds-message').length,
         };
       `)
-      if (state?.path.includes(id) && state.count > 0) {
-        ready = true
-        break
-      }
+      if (state?.path.includes(id) && state.count > 0) return true
       await delay(250)
     }
-    if (!ready) return null
+    return false
+  }
 
-    // 滚到底，等虚拟列表把最后几条渲染出来；
-    // 角标的来源图标/名称是后一步才补上的，多等一会儿再读 HTML
-    await this.scrollConversationToBottom()
-    await delay(900)
-    await this.scrollConversationToBottom()
-    await delay(900)
-
-    const messages =
+  /** 读当前虚拟列表里已经渲染出来的消息（带虚拟项 key） */
+  private async readRenderedMessages(): Promise<HistoryMessage[]> {
+    return (
       (await this.run<HistoryMessage[]>(`
         const out = [];
         for (const node of document.querySelectorAll('.ds-message')) {
@@ -569,12 +758,176 @@ export class DeepSeekPage {
           const ai = node.querySelector('.ds-assistant-message-main-content');
           const text = dsReadAnswer(ai || node);
           if (!text) continue;
-          out.push({ role: ai ? 'ai' : 'user', text, html: ai ? ai.outerHTML : undefined });
+          const holder = node.closest('[data-virtual-list-item-key]');
+          const key = holder ? holder.getAttribute('data-virtual-list-item-key') : '';
+          out.push({
+            role: ai ? 'ai' : 'user',
+            text,
+            html: ai ? ai.outerHTML : undefined,
+            key: key || undefined,
+          });
         }
-        return out.slice(-40);
+        return out;
       `)) ?? []
+    )
+  }
+
+  /**
+   * 只加载最后一段完整对话：最后一条用户消息 + 它后面的所有回答。
+   * 不加载更早的历史；更早的内容由 loadOlderHistory 按需补。
+   */
+  async openHistoryLastExchange(
+    id: string,
+  ): Promise<{ messages: HistoryMessage[]; hasOlder: boolean } | null> {
+    if (!(await this.openConversation(id))) return null
+
+    await this.scrollConversationToBottom()
+    await delay(500)
+
+    let messages = await this.readRenderedMessages()
+    let lastUser = -1
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'user') {
+        lastUser = i
+        break
+      }
+    }
+
+    // 最后一条用户消息可能在长回答上方，先向上补一点直到渲染出来
+    for (let attempt = 0; lastUser < 0 && attempt < 8; attempt += 1) {
+      await this.run(`
+        const list = document.querySelector('.ds-virtual-list');
+        if (list) {
+          list.scrollTop = Math.max(0, list.scrollTop - list.clientHeight * 0.8);
+          list.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+        return true;
+      `)
+      await delay(450)
+      messages = await this.readRenderedMessages()
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].role === 'user') {
+          lastUser = i
+          break
+        }
+      }
+    }
+
+    if (lastUser < 0) {
+      return { messages: messages.slice(-6), hasOlder: true }
+    }
+    return { messages: messages.slice(lastUser), hasOlder: true }
+  }
+
+  /**
+   * 按需加载更早的消息：从当前最早的消息 key 往上补一段。
+   * 返回的 messages 会 prepend 到快捷窗口列表顶部。
+   */
+  async loadOlderHistory(
+    firstKey: string | null,
+  ): Promise<{ messages: HistoryMessage[]; hasOlder: boolean } | null> {
+    let messages = await this.readRenderedMessages()
+    let index = firstKey ? messages.findIndex((m) => m.key === firstKey) : 0
+    if (index > 0) {
+      return { messages: messages.slice(0, index), hasOlder: true }
+    }
+
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const before = await this.run<{ top: number; count: number; height: number }>(`
+        const list = document.querySelector('.ds-virtual-list');
+        return {
+          top: list ? Math.round(list.scrollTop) : 0,
+          count: document.querySelectorAll('.ds-message').length,
+          height: list ? list.scrollHeight : 0,
+        };
+      `)
+
+      await this.run(`
+        const list = document.querySelector('.ds-virtual-list');
+        if (list) {
+          list.scrollTop = Math.max(0, list.scrollTop - list.clientHeight * 0.8);
+          list.dispatchEvent(new Event('scroll', { bubbles: true }));
+        }
+        return true;
+      `)
+      await delay(500)
+
+      messages = await this.readRenderedMessages()
+      index = firstKey ? messages.findIndex((m) => m.key === firstKey) : 0
+      if (index > 0) {
+        return { messages: messages.slice(0, index), hasOlder: true }
+      }
+
+      const after = await this.run<{ top: number; count: number; height: number }>(`
+        const list = document.querySelector('.ds-virtual-list');
+        return {
+          top: list ? Math.round(list.scrollTop) : 0,
+          count: document.querySelectorAll('.ds-message').length,
+          height: list ? list.scrollHeight : 0,
+        };
+      `)
+      if (!before || !after) break
+      if (after.top <= 0 && after.count <= before.count && after.height <= before.height) {
+        return { messages: [], hasOlder: false }
+      }
+    }
+
+    return { messages: [], hasOlder: false }
+  }
+
+  async openHistory(id: string): Promise<HistoryMessage[] | null> {
+    if (!(await this.openConversation(id))) return null
+
+    // 反复滚到顶部，触发更早消息的分页加载。
+    // 虚拟列表会把已经加载的消息留在 DOM 里，加载完后统一读一遍。
+    await this.loadAllConversationMessages()
+    await delay(800)
+
+    const messages = await this.readRenderedMessages()
+
+    // 主窗口里的页面恢复到底部，不影响用户之后打开主窗口时的阅读位置
+    await this.scrollConversationToBottom()
 
     return messages
+  }
+
+  /**
+   * 把整段对话加载出来。
+   *
+   * 对话区是虚拟列表 + 分页：打开时只渲染最后几条，滚到顶部会继续加载更早的消息。
+   * 这里反复滚到顶部，直到消息数量/总高度不再增长，再交给调用方统一读取。
+   */
+  private async loadAllConversationMessages(): Promise<void> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const before = await this.run<{ count: number; height: number }>(`
+        const list = document.querySelector('.ds-virtual-list');
+        return {
+          count: document.querySelectorAll('.ds-message').length,
+          height: list ? list.scrollHeight : 0,
+        };
+      `)
+
+      const scrolled = await this.run<boolean>(`
+        const list = document.querySelector('.ds-virtual-list');
+        if (!list) return false;
+        list.scrollTop = 0;
+        list.dispatchEvent(new Event('scroll', { bubbles: true }));
+        return true;
+      `)
+      if (scrolled !== true) break
+
+      await delay(800)
+
+      const after = await this.run<{ count: number; height: number }>(`
+        const list = document.querySelector('.ds-virtual-list');
+        return {
+          count: document.querySelectorAll('.ds-message').length,
+          height: list ? list.scrollHeight : 0,
+        };
+      `)
+      if (!before || !after) break
+      if (after.count <= before.count && after.height <= before.height) break
+    }
   }
 
   private async scrollConversationToBottom(): Promise<boolean> {
