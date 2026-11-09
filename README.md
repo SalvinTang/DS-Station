@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/DSD_Introduction.gif" alt="DS Station 快捷窗口演示" width="480">
+  <img src="docs/images/DSS_Introduction01.gif" alt="DS Station 快捷窗口演示" width="480">
 </p>
 
 ---
