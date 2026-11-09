@@ -151,6 +151,8 @@ let historyOpen = false
 let historyHasMore = false
 /** 已经请求过「加载更多」，等主进程回话 */
 let historyLoadPending = false
+/** 收起动画结束后再隐藏弹框的定时器 */
+let historyHideTimer: number | undefined
 /** 正在等主进程把选中的历史对话读回来（这期间不让发送） */
 let historyLoading = false
 /** 历史对话加载后的落点，等布局稳定（字体/图片/窗口动画）再对齐一次 */
@@ -281,16 +283,6 @@ function placeHistoryPanel(): void {
   historyPanel.style.maxHeight = `${Math.round(Math.max(120, Math.min(166, available)))}px`
 }
 
-function clearHistoryItems(): void {
-  historyList.replaceChildren()
-  historyList.scrollTop = 0
-  historySeen.clear()
-  historyHasMore = false
-  historyLoadPending = false
-  historyPanel.classList.remove('empty')
-  historyPanel.classList.add('loading')
-}
-
 /**
  * 只改界面，不通知主进程。
  * 主进程推来的 history-panel 也走这里，避免两边来回调用。
@@ -303,13 +295,35 @@ function applyHistoryPanel(open: boolean): void {
 
   historyOpen = open
   historyButton.setAttribute('aria-pressed', String(open))
-  app.classList.toggle('history-open', open)
 
   if (open) {
-    clearHistoryItems()
+    /*
+     * 空态窗口会临时撑高到 230，composer 必须固定 100 高贴在底部。
+     * 关闭时不能立刻去掉这个类：窗口还有 260ms 的收起缓冲期，
+     * 提前去掉 composer 会先撑满整个窗口，看起来就是「变大再变小」。
+     * 类由下面的 window resize 处理：窗口真正缩回 100 后再移除。
+     */
+    if (mode === 'empty') app.classList.add('history-open')
+    if (historyHideTimer !== undefined) {
+      window.clearTimeout(historyHideTimer)
+      historyHideTimer = undefined
+    }
+
+    /*
+     * 连续开合时保留上一次的列表，不先清空再等接口。
+     * 只有第一次打开（列表为空）才用 loading 占住高度。
+     */
+    historyLoadPending = false
+    historyHasMore = false
+    historySeen.clear()
+    historyPanel.classList.remove('empty')
+    historyPanel.classList.toggle('loading', historyList.children.length === 0)
+
     historyPanel.hidden = false
     placeHistoryPanel()
     requestAnimationFrame(() => {
+      // 这一帧之前用户又关掉了，就不要再打开，否则会闪一下
+      if (!historyOpen) return
       placeHistoryPanel()
       historyPanel.classList.add('open')
     })
@@ -318,17 +332,38 @@ function applyHistoryPanel(open: boolean): void {
 
   historyPanel.classList.remove('open')
   historyLoadPending = false
-  historyList.replaceChildren()
-  historySeen.clear()
   historyHasMore = false
-  // 等淡出动画结束再真正藏起来；期间又打开就别藏
-  window.setTimeout(() => {
+  // 保留列表 DOM，下次打开可以立即显示；淡出动画结束后再真正藏起来
+  if (historyHideTimer !== undefined) window.clearTimeout(historyHideTimer)
+  historyHideTimer = window.setTimeout(() => {
+    historyHideTimer = undefined
     if (!historyOpen) historyPanel.hidden = true
   }, 160)
 }
 
 function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
   if (!append) {
+    /*
+     * 连续开合时接口很快会返回同一份列表。
+     * 内容和顺序都没变就不要再重建 DOM —— 重建会让列表闪一下。
+     */
+    const current = Array.from(historyList.children) as HTMLElement[]
+    const same =
+      current.length === items.length &&
+      items.every((item, index) => {
+        const button = current[index]
+        return button?.dataset.id === item.id && button.textContent === item.title
+      })
+
+    if (same) {
+      historySeen.clear()
+      for (const item of items) historySeen.add(item.id)
+      historyPanel.classList.remove('loading')
+      historyPanel.classList.toggle('empty', items.length === 0)
+      placeHistoryPanel()
+      return
+    }
+
     historyList.replaceChildren()
     historyList.scrollTop = 0
     historySeen.clear()
@@ -341,6 +376,7 @@ function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
     const button = document.createElement('button')
     button.type = 'button'
     button.className = 'history-item'
+    button.dataset.id = item.id
     button.textContent = item.title
     // 条目本身已经被 CSS 截断，悬停时给出完整标题
     button.title = item.title
@@ -512,7 +548,8 @@ function buildMessageGroup(
   messageKey?: string,
 ): { group: HTMLElement; body: HTMLElement } {
   const group = document.createElement('div')
-  group.className = 'msg-group'
+  // 用户提问 / AI 回答各自是一个独立的组，上下边距不同
+  group.className = `msg-group msg-group-${kind}`
 
   const template = document.getElementById(kind === 'user' ? 'tplUser' : 'tplAi')
   if (template instanceof HTMLTemplateElement) group.appendChild(template.content.cloneNode(true))
@@ -700,7 +737,8 @@ function requestOlderHistory(): void {
 function addThinking(): void {
   if (thinkingEl) return
   const group = document.createElement('div')
-  group.className = 'msg-group'
+  // 等待动画占的是「AI 回答组」的位置，上边距和回答保持一致
+  group.className = 'msg-group msg-group-thinking'
   const box = document.createElement('div')
   box.className = 'thinking'
   box.innerHTML = '<i></i><i></i><i></i>'
@@ -843,9 +881,9 @@ function submit(): void {
   }
 
   /*
-   * 空态 → 有内容态：主进程会把窗口下移再向上长高。
-   * 这期间先把内容藏起来，等主进程发来 transition-done 再淡入 ——
-   * 效果就是「外框先撑开，内容再出现」。
+   * 空态 → 有内容态。
+   * 动效暂时关闭：主进程直接切到最终窗口，内容也跟着直接出现。
+   * 恢复动效时取消下面 content-enter 那段注释即可。
    */
   const enteringContent = mode === 'empty'
 
@@ -857,11 +895,15 @@ function submit(): void {
     startNewChat: enteringContent,
   }
 
-  if (enteringContent) {
-    app.classList.add('content-enter')
-    // 兜底：万一没收到 transition-done，也不要把内容永久藏着
-    window.setTimeout(() => app.classList.remove('content-enter'), 1500)
-  }
+  /*
+   * 动效暂时关闭，直接展示最终效果：
+   *
+   * if (enteringContent) {
+   *   app.classList.add('content-enter')
+   *   // 兜底：万一没收到 transition-done，也不要把内容永久藏着
+   *   window.setTimeout(() => app.classList.remove('content-enter'), 1500)
+   * }
+   */
 
   // 先把反馈给到用户：切形态 + 画出自己那条气泡，然后再等回答
   switchToContent()
@@ -1280,9 +1322,13 @@ app.addEventListener('mouseleave', scheduleTopbarHide)
 
 tbClose?.addEventListener('click', () => window.ds?.hideQuickWindow())
 tbNewChat?.addEventListener('click', () => {
-  // 收起动画：内容先淡出，等主进程把窗口收回去、发来 mode-changed 再切空态
-  app.classList.add('content-leave')
-  window.setTimeout(() => app.classList.remove('content-leave'), 1500)
+  /*
+   * 动效暂时关闭，直接切回空态。
+   * 恢复动效时取消下面两行注释：
+   *
+   * app.classList.add('content-leave')
+   * window.setTimeout(() => app.classList.remove('content-leave'), 1500)
+   */
   window.ds?.quickNewChat()
 })
 tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
@@ -1299,6 +1345,8 @@ app.addEventListener('pointerdown', (event) => {
   if (historyOpen) return
   const target = event.target as HTMLElement | null
   if (target?.closest('button, textarea, input, select, a, .messages, .history-panel')) return
+  // 个别情况下 screenX/Y 会是 NaN，不能拿它当拖动起点
+  if (!Number.isFinite(event.screenX) || !Number.isFinite(event.screenY)) return
 
   dragOrigin = { x: event.screenX, y: event.screenY }
   try {
@@ -1313,6 +1361,7 @@ app.addEventListener('pointerdown', (event) => {
 
 app.addEventListener('pointermove', (event) => {
   if (!dragOrigin) return
+  if (!Number.isFinite(event.screenX) || !Number.isFinite(event.screenY)) return
   window.ds?.moveWindowDrag(event.screenX, event.screenY)
 })
 
@@ -1348,7 +1397,12 @@ window.addEventListener('focus', focusInput)
 
 // 窗口尺寸变化（空态展开历史、用户缩放有内容态）后重新贴一下弹框
 window.addEventListener('resize', () => {
-  if (historyOpen) placeHistoryPanel()
+  if (historyOpen) {
+    placeHistoryPanel()
+  } else if (app.dataset.mode === 'empty' && window.innerHeight <= 220) {
+    // 历史弹框已关闭，且窗口已经从撑高状态缩回：现在才撤掉 composer 的固定高度
+    app.classList.remove('history-open')
+  }
   placeMessagesFade()
 })
 

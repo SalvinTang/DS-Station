@@ -67,9 +67,9 @@ function findArtifact(build, since) {
 
   const wanted =
     target === 'dir'
-      ? names.filter((name) => name === 'mac-arm64').map((name) => join(releaseDir, name, 'DS Desktop.app'))
+      ? names.filter((name) => name === 'mac-arm64').map((name) => join(releaseDir, name, 'DS Station.app'))
       : names
-          .filter((name) => name.startsWith('DS-Desktop-') && name.endsWith(`-${build}-arm64.dmg`))
+          .filter((name) => name.startsWith('DS-Station-') && name.endsWith(`-${build}-arm64.dmg`))
           .map((name) => join(releaseDir, name))
 
   for (const path of wanted) {
@@ -82,11 +82,12 @@ function findArtifact(build, since) {
   return null
 }
 
+const packageVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
 const previous = readBuildNumber()
 const next = skipBump ? previous : previous + 1
 const build = String(next).padStart(3, '0')
 
-console.log(`[dist] 版本 1.0.0.${build}，目标 ${target}`)
+console.log(`[dist] 版本 ${packageVersion}.${build}，目标 ${target}`)
 
 if (!skipBump) writeBuildNumber(next)
 

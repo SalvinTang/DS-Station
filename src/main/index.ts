@@ -30,7 +30,27 @@ import {
 } from './windows/settings-window'
 
 // 必须在 ready 之前设置：它决定 userData 落在哪个目录
-app.setName('DS Desktop')
+app.setName('DS Station')
+
+/*
+ * 兼容旧版本的用户数据。
+ * 1.0.x 叫 DS Desktop，登录态和设置都在 ~/Library/Application Support/DS Desktop。
+ * 新目录还不存在时继续沿用旧目录，升级后不用重新登录；全新安装则使用新目录。
+ *
+ * 注意不要先调 app.getPath('userData')：它会把新目录创建出来，
+ * 让下面的 existsSync 判断永远失效。
+ */
+const appDataDir = app.getPath('appData')
+const newUserData = join(appDataDir, 'DS Station')
+const legacyUserData = join(appDataDir, 'DS Desktop')
+const preferLegacyUserData = !existsSync(newUserData) && existsSync(legacyUserData)
+
+// 测试辅助：把数据目录指到别处。正式运行不会设置这个变量
+if (process.env.DS_USER_DATA) {
+  app.setPath('userData', process.env.DS_USER_DATA)
+} else {
+  app.setPath('userData', preferLegacyUserData ? legacyUserData : newUserData)
+}
 
 /*
  * ★ 主窗口不可见时，DeepSeek 网页仍然要正常跑。
@@ -48,11 +68,38 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 
-// 测试辅助：把数据目录指到别处。正式运行不会设置这个变量，
-// userData 落在 ~/Library/Application Support/DS Desktop/
-if (process.env.DS_USER_DATA) {
-  app.setPath('userData', process.env.DS_USER_DATA)
+/*
+ * 让 Electron / DeepSeek 网页跟随系统语言。
+ *
+ * 打包后的 Electron 可能把应用语言判定成 en-US（即使系统是中文），
+ * DeepSeek 的语言偏好默认是 system，于是首次登录的页面会显示英文。
+ * 这里显式指定 --lang：Chromium 的 navigator.language、Accept-Language
+ * 以及 DeepSeek 请求里的 x-client-locale 都会跟着它走。
+ *
+ * 安装包里只保留了中/英语言包（见 scripts/after-pack.cjs），
+ * 所以非中文系统统一落到英文；繁体中文系统用 zh-TW。
+ */
+function pageLocaleFromSystem(): string {
+  const preferred = app.getPreferredSystemLanguages?.() ?? []
+  const raw = String(preferred[0] || app.getLocale() || 'en-US')
+  const lower = raw.toLowerCase()
+  if (lower.startsWith('zh')) {
+    if (
+      lower.includes('hant') ||
+      lower.includes('-tw') ||
+      lower.includes('-hk') ||
+      lower.includes('-mo')
+    ) {
+      return 'zh-TW'
+    }
+    return 'zh-CN'
+  }
+  return 'en-US'
 }
+
+const pageLocale = pageLocaleFromSystem()
+app.commandLine.appendSwitch('lang', pageLocale)
+console.log(`[语言] 系统首选=${app.getPreferredSystemLanguages?.()[0] ?? 'unknown'}，页面语言=${pageLocale}`)
 
 let mainWindow: MainWindow | null = null
 let quickWindow: QuickWindow | null = null
@@ -227,6 +274,26 @@ if (!app.requestSingleInstanceLock()) {
       runHistorySelfCheck(mainWindow, quickWindow)
     }
 
+    // 历史弹框连续点击自检：快速开合时窗口不应反复缩放/闪阴影
+    if (process.env.DS_TOGGLE_TEST === '1') {
+      runHistoryToggleSelfCheck(quickWindow)
+    }
+
+    // 拖动自检：NaN 坐标不能把主进程打崩
+    if (process.env.DS_DRAG_TEST === '1') {
+      runDragSelfCheck(quickWindow)
+    }
+
+    // 点击自检：点历史按钮的图标和文字，检查事件目标和窗口位置
+    if (process.env.DS_CLICK_TEST === '1') {
+      runHistoryClickSelfCheck(quickWindow)
+    }
+
+    // 展开/收起动效自检：记录窗口和输入框在动画中的几何
+    if (process.env.DS_MODE_TEST === '1') {
+      runModeTransitionSelfCheck(quickWindow)
+    }
+
     // 接口 Markdown 渲染自检
     if (process.env.DS_API_MD_TEST === '1') {
       runApiMarkdownSelfCheck(quickWindow)
@@ -313,13 +380,23 @@ function registerIpcHandlers(): void {
   ipcMain.on('ds:quick-hide', () => quickWindow?.hide())
 
   ipcMain.on('ds:window-drag-start', (_event, screenX: unknown, screenY: unknown) => {
-    if (typeof screenX === 'number' && typeof screenY === 'number') {
+    if (
+      typeof screenX === 'number' &&
+      Number.isFinite(screenX) &&
+      typeof screenY === 'number' &&
+      Number.isFinite(screenY)
+    ) {
       quickWindow?.beginDrag(screenX, screenY)
     }
   })
 
   ipcMain.on('ds:window-drag-move', (_event, screenX: unknown, screenY: unknown) => {
-    if (typeof screenX === 'number' && typeof screenY === 'number') {
+    if (
+      typeof screenX === 'number' &&
+      Number.isFinite(screenX) &&
+      typeof screenY === 'number' &&
+      Number.isFinite(screenY)
+    ) {
       quickWindow?.moveDrag(screenX, screenY)
     }
   })
@@ -425,6 +502,12 @@ async function handleLogout(): Promise<void> {
 
   save({ login: { knownLoggedIn: false } })
   startupFlow?.onLoggedOut()
+  // 退出登录：历史列表的内存数据一并清掉
+  historyListEpoch += 1
+  historyApiItems = null
+  historyApiSeen = new Set()
+  historyApiSent = 0
+  historyApiHasMore = false
   quickWindow?.sendEvent({ type: 'conversation-cleared' })
   quickWindow?.setMode('empty')
 
@@ -639,15 +722,45 @@ async function handleContinueGeneration(): Promise<void> {
 
 // ── 历史对话 ────────────────────────────────────────────────────
 
+/** 接口一次取回 100 条，快捷窗口每次先显示 30 条，滚动再追加 */
+const HISTORY_API_CHUNK = 30
+
 let historyPanelOpen = false
 let historyLoadingMore = false
 let historySentIds = new Set<string>()
 let historyOldestKey: string | null = null
 let historyOlderLoading = false
+/**
+ * 接口列表状态。非 null 表示当前走的是接口路径。
+ * items 是已经从接口拿到的全部条目，sent 是已经推给快捷窗口的条数。
+ */
+let historyApiItems: HistoryEntry[] | null = null
+let historyApiSeen = new Set<string>()
+let historyApiSent = 0
+let historyApiCursor: number | null = null
+let historyApiHasMore = false
+/** 列表请求序号：弹框快速开合时，旧请求的结果直接丢掉 */
+let historyListEpoch = 0
 /** 当前快捷窗口正在预览的历史会话（预览阶段不切主页面） */
 let activeHistoryId: string | null = null
 /** 历史选择请求序号：连续点击时只让最后一次生效 */
 let historySelectEpoch = 0
+
+/** 把接口列表里下一段（30 条）推给快捷窗口 */
+function sendApiHistoryChunk(quick: QuickWindow): void {
+  const items = historyApiItems ?? []
+  const next = items.slice(historyApiSent, historyApiSent + HISTORY_API_CHUNK)
+  // 第一次发送是覆盖，后续滚动加载是追加
+  const append = historyApiSent > 0
+  historyApiSent += next.length
+
+  quick.sendEvent({
+    type: 'history-list',
+    items: next,
+    append,
+    hasMore: historyApiSent < items.length || historyApiHasMore,
+  })
+}
 
 async function handleHistoryToggle(open: boolean): Promise<void> {
   const win = mainWindow
@@ -656,6 +769,11 @@ async function handleHistoryToggle(open: boolean): Promise<void> {
 
   if (!open) {
     historyPanelOpen = false
+    historyListEpoch += 1
+    historyApiItems = null
+    historyApiSeen = new Set()
+    historyApiSent = 0
+    historyApiHasMore = false
     quick.closeHistoryPanel()
     return
   }
@@ -668,19 +786,53 @@ async function handleHistoryToggle(open: boolean): Promise<void> {
 
   historyPanelOpen = true
   historySentIds = new Set()
+  historyApiItems = null
+  historyApiSeen = new Set()
+  historyApiSent = 0
+  historyApiCursor = null
+  historyApiHasMore = false
+  historyLoadingMore = false
+  const epoch = ++historyListEpoch
   quick.openHistoryPanel()
 
   const page = new DeepSeekPage(win.pageView)
-  let result: { items: HistoryEntry[]; scrollable: boolean } = { items: [], scrollable: false }
 
-  // 页面可能刚启动、侧边栏是懒渲染的，等一会儿再读
+  /*
+   * 接口优先：和主窗口大小、侧边栏是否渲染无关。
+   * 主窗口被缩得很小时，侧边栏 DOM 会被隐藏，旧的 readHistory 会读到空列表。
+   */
+  const list = await page.fetchHistoryList(null)
+  if (epoch !== historyListEpoch || !historyPanelOpen) return
+
+  if (list) {
+    console.log(
+      `[历史] 列表来源=api，${list.items.length} 条，hasMore=${list.hasMore}，cursor=${list.cursor}`,
+    )
+    historyApiItems = list.items
+    historyApiCursor = list.cursor
+    historyApiHasMore = list.hasMore
+    for (const item of list.items) historyApiSeen.add(item.id)
+
+    if (!list.items.length) {
+      quick.sendEvent({ type: 'history-list', items: [], append: false, hasMore: false })
+      return
+    }
+
+    sendApiHistoryChunk(quick)
+    return
+  }
+
+  // 接口不可用（未登录 / 没有请求头 / 网络失败）时退回读侧边栏
+  let result: { items: HistoryEntry[]; scrollable: boolean } = { items: [], scrollable: false }
   for (let i = 0; i < 20; i++) {
     result = await page.readHistory()
-    if (result.items.length > 0 || !historyPanelOpen) break
+    if (epoch !== historyListEpoch || !historyPanelOpen) return
+    if (result.items.length > 0) break
     await delay(500)
   }
 
-  if (!historyPanelOpen) return
+  if (epoch !== historyListEpoch || !historyPanelOpen) return
+  console.log(`[历史] 列表来源=dom，${result.items.length} 条`)
   for (const item of result.items) historySentIds.add(item.id)
   quick.sendEvent({
     type: 'history-list',
@@ -697,9 +849,50 @@ async function handleHistoryMore(): Promise<void> {
   if (!win || !quick || !historyPanelOpen || historyLoadingMore) return
 
   historyLoadingMore = true
+  const epoch = historyListEpoch
   try {
+    // 接口路径：内存里还有就直接发；没有就带 cursor 再取一页
+    if (historyApiItems) {
+      if (historyApiSent < historyApiItems.length) {
+        sendApiHistoryChunk(quick)
+        return
+      }
+
+      if (!historyApiHasMore) {
+        quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+        return
+      }
+
+      const page = new DeepSeekPage(win.pageView)
+      const nextPage = await page.fetchHistoryList(historyApiCursor)
+      if (epoch !== historyListEpoch || !historyPanelOpen) return
+      if (!nextPage) {
+        historyApiHasMore = false
+        quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+        return
+      }
+
+      // 接口的 cursor 是闭区间（会重复上一页最后一条），按 id 去重
+      const fresh = nextPage.items.filter((item) => !historyApiSeen.has(item.id))
+      for (const item of fresh) historyApiSeen.add(item.id)
+      historyApiItems.push(...fresh)
+      if (nextPage.cursor !== null) historyApiCursor = nextPage.cursor
+      // 整页都是重复内容时直接收尾，避免 cursor 不前进导致死循环
+      historyApiHasMore = nextPage.hasMore && fresh.length > 0
+
+      if (!fresh.length) {
+        quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+        return
+      }
+
+      sendApiHistoryChunk(quick)
+      return
+    }
+
+    // DOM 兜底：滚侧边栏加载下一屏
     const page = new DeepSeekPage(win.pageView)
     const scrolled = await page.scrollHistoryToBottom()
+    if (epoch !== historyListEpoch || !historyPanelOpen) return
     if (!scrolled) {
       quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
       return
@@ -711,7 +904,7 @@ async function handleHistoryMore(): Promise<void> {
     const fresh = items.filter((item) => !historySentIds.has(item.id))
     for (const item of fresh) historySentIds.add(item.id)
 
-    if (!historyPanelOpen) return
+    if (epoch !== historyListEpoch || !historyPanelOpen) return
     quick.sendEvent({
       type: 'history-list',
       items: fresh,
@@ -733,6 +926,11 @@ async function handleHistorySelect(id: string): Promise<void> {
   const epoch = ++historySelectEpoch
   activeHistoryId = null
   historyPanelOpen = false
+  historyListEpoch += 1
+  historyApiItems = null
+  historyApiSeen = new Set()
+  historyApiSent = 0
+  historyApiHasMore = false
   // 空态点历史时窗口是临时撑高的，切到有内容态会重新算尺寸
   quick.setMode('content')
   quick.sendEvent({ type: 'history-panel', open: false })
@@ -1558,6 +1756,236 @@ function runScrollSelfCheck(quick: QuickWindow | null): void {
 }
 
 /** 历史对话功能自检：打开弹框 → 读列表 → 选第一条 → 检查快捷窗口内容 */
+/** 自检：空态 ↔ 有内容态动画的窗口尺寸和输入框位置 */
+function runModeTransitionSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+  const run = <T>(js: string): Promise<T> => quick.window.webContents.executeJavaScript(js)
+
+  const composerState = (): Promise<{ x: number; y: number; w: number; h: number; gap: number }> =>
+    run(`(() => {
+      const el = document.querySelector('.composer')
+      const r = el.getBoundingClientRect()
+      return {
+        x: Math.round(r.x),
+        y: Math.round(r.y),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        gap: Math.round(innerHeight - (r.y + r.height)),
+      }
+    })()`)
+
+  setTimeout(() => quick.show(), 800)
+  setTimeout(async () => {
+    // 模拟用户输入多行、空态窗口已经长到 200 高
+    await run(`window.ds.resizeQuickWindow(200); true`)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    console.log('[动效测试] 初始窗口:', JSON.stringify(quick.window.getBounds()))
+
+    await run(`window.ds.setQuickMode('content'); true`)
+
+    const forward = []
+    const startedAt = Date.now()
+    for (let i = 0; i < 26; i += 1) {
+      forward.push({
+        t: Date.now() - startedAt,
+        window: quick.window.getBounds(),
+        composer: await composerState(),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    console.log('[动效测试] 展开采样:', JSON.stringify(forward))
+
+    await run(`window.ds.quickNewChat(); true`)
+
+    const reverse = []
+    const startedAt2 = Date.now()
+    for (let i = 0; i < 26; i += 1) {
+      reverse.push({
+        t: Date.now() - startedAt2,
+        window: quick.window.getBounds(),
+        composer: await composerState(),
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    console.log('[动效测试] 收起采样:', JSON.stringify(reverse))
+    console.log('[动效测试] 结束窗口:', JSON.stringify(quick.window.getBounds()))
+    process.exit(0)
+  }, 1400)
+}
+
+/** 自检：点历史按钮的图标/文字时，事件目标和窗口位置是否正确 */
+function runHistoryClickSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+  const run = <T>(js: string): Promise<T> => quick.window.webContents.executeJavaScript(js)
+
+  setTimeout(() => quick.show(), 800)
+  setTimeout(async () => {
+    const info = await run<{
+      svg: { x: number; y: number; w: number; h: number }
+      label: { x: number; y: number; w: number; h: number }
+      iconHit: unknown
+      labelHit: unknown
+    }>(`(() => {
+      const btn = document.getElementById('history')
+      const svg = btn.querySelector('svg')
+      const label = document.getElementById('historyLabel')
+      const sr = svg.getBoundingClientRect()
+      const lr = label.getBoundingClientRect()
+      const hit = (x, y) => {
+        const el = document.elementFromPoint(x, y)
+        return {
+          tag: el ? el.tagName : null,
+          cls: el ? String(el.className || '') : '',
+          button: el && el.closest ? ((el.closest('button') || {}).id || null) : null,
+        }
+      }
+      return {
+        svg: { x: sr.left, y: sr.top, w: sr.width, h: sr.height },
+        label: { x: lr.left, y: lr.top, w: lr.width, h: lr.height },
+        iconHit: hit(sr.left + sr.width / 2, sr.top + sr.height / 2),
+        labelHit: hit(lr.left + lr.width / 2, lr.top + lr.height / 2),
+      }
+    })()`)
+
+    console.log('[点击测试] 命中:', JSON.stringify(info))
+
+    const ix = Math.round(info.svg.x + info.svg.w / 2)
+    const iy = Math.round(info.svg.y + info.svg.h / 2)
+    const before = quick.window.getBounds()
+    quick.window.webContents.sendInputEvent({ type: 'mouseMove', x: ix, y: iy })
+    quick.window.webContents.sendInputEvent({
+      type: 'mouseDown',
+      x: ix,
+      y: iy,
+      button: 'left',
+      clickCount: 1,
+    })
+    quick.window.webContents.sendInputEvent({ type: 'mouseMove', x: ix + 3, y: iy + 2 })
+    quick.window.webContents.sendInputEvent({
+      type: 'mouseUp',
+      x: ix + 3,
+      y: iy + 2,
+      button: 'left',
+      clickCount: 1,
+    })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    const after = quick.window.getBounds()
+    const opened = await run<{ height: number; composer: number; cls: string }>(`(() => ({
+      height: innerHeight,
+      composer: Math.round(document.querySelector('.composer').getBoundingClientRect().height),
+      cls: document.getElementById('app').className,
+    }))()`)
+    console.log(
+      `[点击测试] 图标按下并移动 3,2 后 bounds=${JSON.stringify(after)}（之前 ${JSON.stringify(before)}，底边应保持 ${before.y + before.height}），界面=${JSON.stringify(opened)}`,
+    )
+
+    // 再点一次图标关闭：窗口收起缓冲期内 composer 不能撑满窗口
+    const rect2 = await run<{ x: number; y: number; w: number; h: number }>(`(() => {
+      const r = document.querySelector('#history svg').getBoundingClientRect()
+      return { x: r.left, y: r.top, w: r.width, h: r.height }
+    })()`)
+    const cx = Math.round(rect2.x + rect2.w / 2)
+    const cy = Math.round(rect2.y + rect2.h / 2)
+    quick.window.webContents.sendInputEvent({ type: 'mouseMove', x: cx, y: cy })
+    quick.window.webContents.sendInputEvent({
+      type: 'mouseDown',
+      x: cx,
+      y: cy,
+      button: 'left',
+      clickCount: 1,
+    })
+    quick.window.webContents.sendInputEvent({
+      type: 'mouseUp',
+      x: cx,
+      y: cy,
+      button: 'left',
+      clickCount: 1,
+    })
+
+    for (const wait of [0, 100, 300, 600]) {
+      if (wait) await new Promise((resolve) => setTimeout(resolve, wait))
+      const b = quick.window.getBounds()
+      const ui = await run<{ height: number; composer: number; cls: string }>(`(() => ({
+        height: innerHeight,
+        composer: Math.round(document.querySelector('.composer').getBoundingClientRect().height),
+        cls: document.getElementById('app').className,
+      }))()`)
+      console.log(
+        `[点击测试] 关闭 +${wait}ms bounds=${b.width}x${b.height} 界面=${JSON.stringify(ui)}`,
+      )
+    }
+    process.exit(0)
+  }, 1400)
+}
+
+/** 自检：拖动窗口时收到 NaN 坐标不应崩溃，有效坐标仍能移动 */
+function runDragSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+  const run = (js: string): Promise<unknown> => quick.window.webContents.executeJavaScript(js)
+
+  setTimeout(() => quick.show(), 800)
+  setTimeout(async () => {
+    const before = quick.window.getBounds()
+    await run(`window.ds.beginWindowDrag(NaN, NaN); window.ds.moveWindowDrag(NaN, NaN); true`)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const afterNaN = quick.window.getBounds()
+    console.log(
+      `[拖动测试] NaN 后窗口位置 ${afterNaN.x},${afterNaN.y}（原 ${before.x},${before.y}）`,
+    )
+
+    await run(`window.ds.beginWindowDrag(100, 100); window.ds.moveWindowDrag(140, 130); true`)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const afterMove = quick.window.getBounds()
+    console.log(
+      `[拖动测试] 有效拖动后窗口位置 ${afterMove.x},${afterMove.y}（应为原位置 +40,+30）`,
+    )
+
+    await run(`window.ds.endWindowDrag(); true`)
+    process.exit(0)
+  }, 1400)
+}
+
+/**
+ * 自检：连续快速点击「历史」按钮。
+ * 期望窗口在点击期间一直保持撑高（230），停止点击后延迟一小会儿才缩回；
+ * 不应该每点一次就 100↔230 反复缩放（浅色背景下那会看到阴影闪烁）。
+ */
+function runHistoryToggleSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+  const run = (js: string): Promise<unknown> => quick.window.webContents.executeJavaScript(js)
+
+  setTimeout(() => quick.show(), 800)
+  setTimeout(() => {
+    let clicks = 0
+    const click = (): void => {
+      clicks += 1
+      void run(`document.getElementById('history').click()`)
+        .then(async () => {
+          const bounds = quick.window.getBounds()
+          const panel = await run(`(() => {
+            const el = document.getElementById('historyPanel')
+            return { open: el.classList.contains('open'), hidden: el.hidden }
+          })()`)
+          console.log(
+            `[切换测试] 第 ${clicks} 次点击 bounds=${bounds.width}x${bounds.height} panel=${JSON.stringify(panel)}`,
+          )
+
+          if (clicks < 8) {
+            setTimeout(click, 120)
+            return
+          }
+          // 最后一次是「关闭」，等过缓冲期后窗口应该缩回
+          await new Promise((resolve) => setTimeout(resolve, 500))
+          const settled = quick.window.getBounds()
+          console.log(`[切换测试] 停止点击 500ms 后 bounds=${settled.width}x${settled.height}`)
+          process.exit(0)
+        })
+        .catch((error) => console.log('[切换测试] 失败:', String(error)))
+    }
+    click()
+  }, 1400)
+}
+
 function runHistorySelfCheck(win: MainWindow | null, quick: QuickWindow | null): void {
   if (!win || !quick) return
   const run = (js: string): Promise<unknown> =>

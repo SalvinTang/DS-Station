@@ -317,6 +317,30 @@ body {
   flex-direction: column;
 }
 
+/*
+ * 每组对话的上下边距（组的上/下边由组内最上/最下的控件决定）：
+ *   用户提问：上 10、下 10
+ *   AI 回答：上 6、下 30
+ * 列表第一条不再加上边距 —— 消息区顶部本来就有 10px 空隙，
+ * 再加一次会让首条内容掉到 60px。
+ */
+.msg-group-user {
+  margin: 10px 0;
+}
+
+.msg-group-ai {
+  margin: 6px 0 30px;
+}
+
+/* 等待回答的呼吸点占的是 AI 回答组的位置 */
+.msg-group-thinking {
+  margin-top: 6px;
+}
+
+.messages-inner > .msg-group:first-child {
+  margin-top: 0;
+}
+
 .msg-user {
   display: flex;
   justify-content: flex-end;
@@ -351,8 +375,17 @@ body {
   white-space: normal;
 }
 
-.md > :first-child {
+.msg-ai .body.md > :first-child {
   margin-top: 0;
+}
+
+/*
+ * 组的上下边贴着真正的内容控件：去掉末尾块级元素的多余外边距。
+ * 提高一级选择器权重，压过下面 .md .md-code-block / .md-table-wrap /
+ * .md-math-display 自己的 margin。
+ */
+.msg-ai .body.md > :last-child {
+  margin-bottom: 0;
 }
 
 .md p {
@@ -777,17 +810,39 @@ body {
   }
 }
 
-/* 设计稿：内容下方 10px 是复制按钮，按钮下方再留 30px 到下一组 */
+/*
+ * 复制按钮离内容 6px。
+ * 按钮本身 20px，16px 图标居中，上下各有 2px 内缩，
+ * 所以外边距写 4px，视觉上图标离内容正好 6px。
+ * 组的下边距由 .msg-group-user / .msg-group-ai 负责。
+ */
 .msg-actions {
   display: flex;
-  margin-top: 10px;
-  margin-bottom: 30px;
+  margin-top: 4px;
+  margin-bottom: 0;
 }
 
 .msg-actions.right {
   justify-content: flex-end;
   /* 图标 16 + 按钮 20，右移 2px 对齐到 10px 边距 */
   margin-right: -2px;
+}
+
+/*
+ * 用户提问下的操作按钮默认隐藏，鼠标进入这个用户提问组时才显示。
+ * 用 opacity 而不是 display/visibility，隐藏时仍占位，上下间距不会跳。
+ * 键盘 Tab 到复制按钮时（focus-within）也显示。
+ */
+.msg-group-user .msg-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.msg-group-user:hover .msg-actions,
+.msg-group-user:focus-within .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .msg-actions:not(.right) {
@@ -1067,17 +1122,37 @@ body {
   display: block;
 }
 
-/* 展开动画进行中：只显示外框，内容等动画结束再淡入 */
+/*
+ * 展开/收起动画进行中：
+ * - 消息先藏起来，动画结束再淡入
+ * - 输入框始终可见，固定 400×100 贴在窗口底部；
+ *   外框多出来的 10px 由窗口变宽自然让出来
+ */
 .app.content-enter .messages,
-.app.content-enter .composer {
+.app.content-leave .messages,
+.app.content-leave .topbar {
   opacity: 0;
 }
 
-/* 收起动画进行中：内容先淡出，窗口随后收回空态 */
-.app.content-leave .messages,
-.app.content-leave .composer,
-.app.content-leave .topbar {
-  opacity: 0;
+.app.content-enter,
+.app.content-leave {
+  /* 动画期间外框直接实色，不做背景/圆角渐变，避免内框看起来发虚 */
+  transition: none;
+}
+
+.app.content-enter .composer,
+.app.content-leave .composer {
+  position: absolute;
+  left: 50%;
+  bottom: max(0px, calc((100vw - 400px) / 2 - 1px));
+  width: 400px;
+  height: 100px;
+  min-height: 100px;
+  margin: 0;
+  transform: translateX(-50%);
+  opacity: 1;
+  /* 内框全程实色，不参与任何淡入淡出 */
+  transition: none;
 }
 
 /*

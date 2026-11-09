@@ -4,10 +4,11 @@ import type { HistoryEntry, HistoryMessage } from '../../shared/types'
 import { SELECTOR_KEYS, pagePrelude, type SelectorKey } from './selectors'
 
 /**
- * 驱动主窗口里那个 DeepSeek 网页：写文字、点按钮、读回答。
+ * 驱动主窗口里那个 DeepSeek 网页：写文字、点按钮、读回答、读历史。
  *
- * 这里**不碰** DeepSeek 的私有 API，也不自己解 PoW ——
- * 所有真正的网络交互都由网页自己完成，我们只是在旁边操作它的界面（决策 D1）。
+ * 发消息、生成回答仍然完全由网页自己做，我们不自己解 PoW，也不碰登录态。
+ * 历史列表 / 完整历史消息走的是网页自己的接口，请求头直接复用网页已经
+ * 发出去的 `authorization`，不额外保存 token。
  *
  * 读回答也**不用 CDP** 去旁听 SSE：`Runtime.enable` 是 Cloudflare 明确会盯的
  * 机器人特征，我们 P0 好不容易过了人机验证，不值得冒这个险。
@@ -465,6 +466,138 @@ export class DeepSeekPage {
   }
 
   // ── 历史对话 ──────────────────────────────────────────────────
+
+  /**
+   * 用接口读历史对话列表，不依赖侧边栏 DOM。
+   *
+   * 网页自己用的就是 `GET /api/v0/chat_session/fetch_page`：
+   *   ?lte_cursor.pinned=false
+   *   &lte_cursor.updated_at=<上一页最后一条的 updated_at>   ← 翻下一页
+   *
+   * 所以主窗口被缩得很小、侧边栏被隐藏时，列表依然能拿到。
+   * cursor 传上一页最后一条会话的 updated_at；首页传 null。
+   */
+  async fetchHistoryList(
+    cursor: number | null = null,
+  ): Promise<{ items: HistoryEntry[]; hasMore: boolean; cursor: number | null } | null> {
+    await this.installApiHeaderHook()
+
+    const readHeaders = (): Promise<Record<string, string> | null> =>
+      this.run<Record<string, string> | null>(`return window.__dsApiHeaders || null;`)
+
+    let headers = await readHeaders()
+    if (!headers) {
+      // 页面还没发过带登录态的请求；等一会儿，拿不到就让调用方退回 DOM
+      for (let i = 0; i < 15; i += 1) {
+        await delay(100)
+        headers = await readHeaders()
+        if (headers) break
+      }
+    }
+    if (!headers) return null
+
+    const request = (): Promise<{
+      items?: HistoryEntry[]
+      hasMore?: boolean
+      cursor?: number | null
+      error?: string
+      authError?: boolean
+    } | null> =>
+      this.run<{
+        items?: HistoryEntry[]
+        hasMore?: boolean
+        cursor?: number | null
+        error?: string
+        authError?: boolean
+      } | null>(`
+        return (async () => {
+          try {
+            const headers = window.__dsApiHeaders || null;
+            if (!headers) return { error: 'no headers' };
+
+            let url = '/api/v0/chat_session/fetch_page?lte_cursor.pinned=false';
+            const cursor = ${JSON.stringify(cursor)};
+            if (cursor !== null && cursor !== undefined && Number.isFinite(Number(cursor))) {
+              url += '&lte_cursor.updated_at=' + encodeURIComponent(String(cursor));
+            }
+
+            const controller = new AbortController();
+            const timer = setTimeout(function () { controller.abort(); }, 6000);
+            let resp;
+            try {
+              resp = await fetch(url, {
+                credentials: 'include',
+                headers: headers,
+                signal: controller.signal,
+              });
+            } finally {
+              clearTimeout(timer);
+            }
+            if (!resp.ok) return { error: 'http ' + resp.status };
+
+            const json = await resp.json();
+            if (json && json.code === 40003) return { authError: true, error: 'invalid token' };
+
+            const data = json && json.data;
+            const biz = data && (data.biz_data || (data.data && data.data.biz_data));
+            if (!biz || !Array.isArray(biz.chat_sessions)) {
+              return { error: 'bad payload code=' + (json && json.code) + ' msg=' + (json && json.msg) };
+            }
+
+            const items = [];
+            const seen = new Set();
+            let nextCursor = null;
+            for (const session of biz.chat_sessions) {
+              if (!session) continue;
+              const id = session.id !== undefined && session.id !== null
+                ? String(session.id)
+                : (session.session_id !== undefined && session.session_id !== null
+                  ? String(session.session_id)
+                  : '');
+              const updatedAt = Number(session.updated_at);
+              if (Number.isFinite(updatedAt)) nextCursor = updatedAt;
+              if (!id || seen.has(id)) continue;
+              const title = typeof session.title === 'string' ? session.title.trim() : '';
+              if (!title) continue;
+              seen.add(id);
+              items.push({ id: id, title: title });
+            }
+
+            return { items: items, hasMore: biz.has_more === true, cursor: nextCursor };
+          } catch (error) {
+            return { error: String(error && error.message ? error.message : error) };
+          }
+        })()
+      `)
+
+    let result = await request()
+
+    if (result && result.authError) {
+      // token 失效：清掉缓存，等页面重新发一个带登录态的请求后重试一次
+      await this.run(`window.__dsApiHeaders = null; return true;`)
+      let fresh = false
+      for (let i = 0; i < 15; i += 1) {
+        await delay(100)
+        if (await readHeaders()) {
+          fresh = true
+          break
+        }
+      }
+      if (!fresh) return null
+      result = await request()
+    }
+
+    if (!result || !Array.isArray(result.items)) {
+      if (result && result.error) console.log('[历史] 接口列表读取失败:', result.error)
+      return null
+    }
+
+    return {
+      items: result.items,
+      hasMore: result.hasMore === true,
+      cursor: typeof result.cursor === 'number' ? result.cursor : null,
+    }
+  }
 
   /**
    * 读左侧边栏的历史对话（由新到旧）。
