@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { allMessages, resolveLanguage, type Language, type ResolvedLanguage } from '../shared/i18n'
+import type { ThemeSetting } from '../shared/types'
 
 /**
  * 本地配置。产品说明书 §10：只保存应用自身的配置，
@@ -18,6 +19,10 @@ export interface WindowState {
 export interface QuickWindowSettings {
   /** Electron accelerator，例如 'Alt+Space' */
   hotkey: string
+  /** 快捷窗口激活且处于有内容态时，新对话的本地快捷键 */
+  newChatShortcut: string
+  /** 快捷窗口激活时，打开/关闭历史对话的本地快捷键 */
+  historyShortcut: string
   /**
    * 设计稿「重置为新聊天」：距上次关闭超过该分钟数，就以空白会话开场。
    * 0 表示「从不」—— 永远保留上一次的对话内容。
@@ -38,6 +43,8 @@ export interface Settings {
   window: WindowState
   quickWindow: QuickWindowSettings
   language: Language
+  /** 应用主题：跟随系统 / 浅色 / 深色 */
+  theme: ThemeSetting
   /**
    * 上一次确认过的登录状态。
    *
@@ -56,6 +63,8 @@ const DEFAULTS: Settings = {
   window: { width: 1280, height: 860 },
   quickWindow: {
     hotkey: 'Alt+Space',
+    newChatShortcut: 'Command+N',
+    historyShortcut: 'Command+Y',
     resetAfterMinutes: 10,
     x: null,
     bottom: null,
@@ -63,6 +72,7 @@ const DEFAULTS: Settings = {
     contentHeight: 500,
   },
   language: 'system',
+  theme: 'system',
   login: { knownLoggedIn: false },
 }
 
@@ -121,6 +131,22 @@ export function load(): Settings {
     // 文件不存在或损坏 → 用默认值，不报错
     cache = merge(DEFAULTS, {})
   }
+
+  /*
+   * 旧版本的默认历史快捷键是 ⌘H，会和 macOS 的隐藏应用冲突，
+   * 导致快速开合时整个面板闪动。这里自动迁移到新的默认值 ⌘Y。
+   */
+  if (cache.quickWindow.historyShortcut === 'Command+H') {
+    cache.quickWindow.historyShortcut = 'Command+Y'
+    try {
+      const file = settingsPath()
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+    } catch {
+      // 写不进去也继续用内存里的 ⌘Y
+    }
+  }
+
   return cache
 }
 

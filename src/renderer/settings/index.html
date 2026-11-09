@@ -10,38 +10,79 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <!-- 顶部栏：和系统标题栏一样可以按住拖动整个窗口 -->
+    <header class="titlebar"></header>
+
     <main class="page">
-      <h1 id="title">设置</h1>
+      <div class="page-head">
+        <h1 id="title">设置</h1>
+      </div>
 
-      <section class="rows">
-        <div class="row">
-          <div class="label" id="lbHotkey">快捷窗口呼出快捷键</div>
-          <button id="hotkey" class="keycap" type="button">—</button>
-        </div>
-        <p class="hint" id="hintHotkey"></p>
+      <div class="content">
+        <section class="card">
+          <h2 id="groupShortcuts">快捷窗口</h2>
 
-        <div class="row">
-          <div class="label" id="lbReset">重置为新聊天</div>
-          <select id="resetAfter" class="select"></select>
-        </div>
-        <p class="hint" id="hintReset"></p>
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbHotkey">呼出快捷窗口</div>
+              <p class="hint" id="hintHotkey"></p>
+            </div>
+            <button id="hotkey" class="keycap" type="button">—</button>
+          </div>
 
-        <div class="row">
-          <div class="label" id="lbLanguage">程序语言</div>
-          <select id="language" class="select"></select>
-        </div>
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbNewChatShortcut">新对话</div>
+              <p class="hint" id="hintNewChat"></p>
+            </div>
+            <button id="newChatShortcut" class="keycap" type="button">—</button>
+          </div>
 
-        <div class="row">
-          <div class="label" id="lbVersion">版本号</div>
-          <div class="value" id="version">—</div>
-        </div>
-      </section>
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbHistoryShortcut">历史对话</div>
+              <p class="hint" id="hintHistory"></p>
+            </div>
+            <button id="historyShortcut" class="keycap" type="button">—</button>
+          </div>
+
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbReset">重置为新聊天</div>
+              <p class="hint" id="hintReset"></p>
+            </div>
+            <select id="resetAfter" class="select"></select>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 id="groupAppearance">外观与语言</h2>
+
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbTheme">主题</div>
+            </div>
+            <select id="theme" class="select"></select>
+          </div>
+
+          <div class="row">
+            <div class="row-text">
+              <div class="label" id="lbLanguage">程序语言</div>
+            </div>
+            <select id="language" class="select"></select>
+          </div>
+        </section>
+
+        <section class="account-bar">
+          <div class="account-meta">
+            <span class="label" id="lbVersion">版本号</span>
+            <span class="value" id="version">—</span>
+          </div>
+          <button id="logout" class="logout" type="button">退出登录</button>
+        </section>
+      </div>
 
       <div class="status" id="status" role="status" aria-live="polite"></div>
-
-      <footer class="footer">
-        <button id="logout" class="danger" type="button">退出登录</button>
-      </footer>
     </main>
 
     <!-- 退出登录二次确认 -->

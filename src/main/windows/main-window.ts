@@ -63,7 +63,7 @@ export class MainWindow {
       y: savedWindow.y,
       minWidth: MIN_WIDTH,
       minHeight: MIN_HEIGHT,
-      title: 'DS Desktop',
+      title: 'DS Station',
       /*
        * 先不显示：启动时由 StartupFlow 判断登录状态后决定
        *   - 已登录 → 只露快捷窗口，主窗口继续隐藏

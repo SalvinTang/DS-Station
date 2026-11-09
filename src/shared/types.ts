@@ -1,16 +1,42 @@
 import type { Language, ResolvedLanguage } from './i18n'
 
+/** 主题：跟随系统 / 浅色 / 深色 */
+export type ThemeSetting = 'system' | 'light' | 'dark'
+
 /** 快捷窗口的两种形态（设计稿：快捷窗口-无内容 / 快捷窗口-有内容） */
 export type QuickMode = 'empty' | 'content'
+
+/** 历史对话列表里的一条 */
+export interface HistoryEntry {
+  id: string
+  title: string
+}
+
+/** 历史对话里的消息。AI 消息额外带渲染好的 HTML（快速窗口负责清洗） */
+export interface HistoryMessage {
+  role: 'user' | 'ai'
+  text: string
+  html?: string
+  /** 接口返回的原始 Markdown（历史对话走接口时使用） */
+  markdown?: string
+  /** 页面虚拟列表的消息 key，用于继续加载更早的消息 */
+  key?: string
+}
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
 export type QuickEvent =
   /** 消息已发出，界面可以进入「等待回答」 */
   | { type: 'answer-start' }
-  /** 回答增量更新（纯文本） */
-  | { type: 'answer-update'; text: string }
+  /** 回答增量更新：text 用于纯文本兜底/复制，html 是页面里渲染好的 Markdown */
+  | { type: 'answer-update'; text: string; html?: string }
   /** 回答结束 */
   | { type: 'answer-done' }
+  /**
+   * 停止操作的结果。
+   * stopped=false 表示 DeepSeek 那边没停成功（页面还在生成），界面要恢复成停止态。
+   * canContinue 表示 DeepSeek 页面是否给出了「继续生成」按钮。
+   */
+  | { type: 'answer-stopped'; stopped: boolean; canContinue: boolean }
   /** 主进程改了窗口形态，界面要跟着切（避免两边状态不一致） */
   | { type: 'mode-changed'; mode: QuickMode }
   /** 空态 → 有内容态的窗口展开动画结束，界面可以把内容淡入 */
@@ -19,6 +45,18 @@ export type QuickEvent =
   | { type: 'conversation-cleared' }
   /** 出错，界面应把消息撤掉并提示 */
   | { type: 'error'; message: string }
+  /** 历史弹框的展开/收起（主进程可能同时改了窗口尺寸） */
+  | { type: 'history-panel'; open: boolean }
+  /** 历史列表（第一次打开 append=false，滚动加载 append=true） */
+  | { type: 'history-list'; items: HistoryEntry[]; append: boolean; hasMore: boolean }
+  /** 正在从 DeepSeek 页面加载选中的历史对话 */
+  | { type: 'history-start' }
+  /** 历史对话加载完成：只包含最后一段完整问答 */
+  | { type: 'history-loaded'; messages: HistoryMessage[]; hasOlder: boolean; source?: 'api' | 'dom' }
+  /** 按需加载的更早历史消息（prepend 到列表顶部） */
+  | { type: 'history-prepended'; messages: HistoryMessage[]; hasOlder: boolean }
+  /** 本地快捷键：打开/关闭历史对话（Ctrl/⌘+H） */
+  | { type: 'history-shortcut' }
 
 export interface QuickSubmitPayload {
   text: string
@@ -47,9 +85,17 @@ export interface SettingsSnapshot {
   messages: Record<string, string>
   language: ResolvedLanguage
   languageSetting: Language
+  /** 主题设置：system / light / dark */
+  theme: ThemeSetting
   /** Electron accelerator，例如 'Alt+Space' */
   hotkey: string
   hotkeyDisplay: string
+  /** 快捷窗口激活时，新对话的本地快捷键 */
+  newChatShortcut: string
+  newChatShortcutDisplay: string
+  /** 快捷窗口激活时，打开历史对话的本地快捷键 */
+  historyShortcut: string
+  historyShortcutDisplay: string
   /** 0 表示「从不」重置 */
   resetAfterMinutes: number
   version: string
@@ -65,13 +111,22 @@ export interface DsApi {
   /** 拉取当前语言的文案表 */
   getMessages: () => Promise<Record<string, string>>
 
+  /** 用系统浏览器打开链接（只允许 http/https） */
+  openExternal: (url: string) => void
+
   // ── 设置 ──────────────────────────────────────────────────
 
   openSettings: () => void
   getSettings: () => Promise<SettingsSnapshot>
   setHotkey: (accelerator: string) => Promise<HotkeyUpdateResult>
+  /** 修改快捷窗口内的本地快捷键（newChat / history） */
+  setQuickShortcut: (
+    name: 'newChat' | 'history',
+    accelerator: string,
+  ) => Promise<HotkeyUpdateResult>
   setResetAfter: (minutes: number) => Promise<void>
   setLanguage: (language: Language) => Promise<void>
+  setTheme: (theme: ThemeSetting) => Promise<void>
   logout: () => Promise<void>
 
   // ── 快捷窗口 ──────────────────────────────────────────────
@@ -86,6 +141,24 @@ export interface DsApi {
 
   /** 提交一条消息，主进程会驱动主窗口里的 DeepSeek 网页完成这次对话 */
   submitQuickMessage: (payload: QuickSubmitPayload) => void
+
+  /** 停止生成：点掉 DeepSeek 页面上的停止按钮 */
+  stopQuickGeneration: () => void
+
+  /** 继续生成：点掉 DeepSeek 页面上的「继续生成」按钮 */
+  continueQuickGeneration: () => void
+
+  /** 打开 / 收起历史对话弹框 */
+  toggleQuickHistory: (open: boolean) => void
+
+  /** 历史列表滚到底部时，让主进程再去页面里滚一屏 */
+  loadMoreQuickHistory: () => void
+
+  /** 选了某条历史对话 */
+  selectQuickHistory: (id: string) => void
+
+  /** 滚到历史消息顶部时，请求更早的一批消息 */
+  loadOlderQuickHistory: () => void
 
   /** 切换窗口形态：空态 ↔ 有内容 */
   setQuickMode: (mode: QuickMode) => void

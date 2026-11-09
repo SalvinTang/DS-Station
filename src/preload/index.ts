@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { Language } from '../shared/i18n'
-import type { DsApi, QuickEvent, QuickMode, QuickSubmitPayload } from '../shared/types'
+import type {
+  DsApi,
+  QuickEvent,
+  QuickMode,
+  QuickSubmitPayload,
+  ThemeSetting,
+} from '../shared/types'
 
 /**
  * 只暴露给「我们自己的」界面（标题栏、快捷窗口、设置页）。
@@ -12,17 +18,27 @@ import type { DsApi, QuickEvent, QuickMode, QuickSubmitPayload } from '../shared
 const api: DsApi = {
   getVersion: () => ipcRenderer.invoke('ds:get-version'),
   getMessages: () => ipcRenderer.invoke('ds:get-messages'),
+  openExternal: (url: string) => ipcRenderer.send('ds:open-external', url),
 
   openSettings: () => ipcRenderer.send('ds:open-settings'),
   getSettings: () => ipcRenderer.invoke('ds:get-settings'),
   setHotkey: (accelerator: string) => ipcRenderer.invoke('ds:set-hotkey', accelerator),
+  setQuickShortcut: (name: 'newChat' | 'history', accelerator: string) =>
+    ipcRenderer.invoke('ds:set-quick-shortcut', name, accelerator),
   setResetAfter: (minutes: number) => ipcRenderer.invoke('ds:set-reset-after', minutes),
   setLanguage: (language: Language) => ipcRenderer.invoke('ds:set-language', language),
+  setTheme: (theme: ThemeSetting) => ipcRenderer.invoke('ds:set-theme', theme),
   logout: () => ipcRenderer.invoke('ds:logout'),
 
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
   resizeQuickWindow: (height) => ipcRenderer.send('ds:quick-resize', height),
   submitQuickMessage: (payload: QuickSubmitPayload) => ipcRenderer.send('ds:quick-submit', payload),
+  stopQuickGeneration: () => ipcRenderer.send('ds:quick-stop'),
+  continueQuickGeneration: () => ipcRenderer.send('ds:quick-continue'),
+  toggleQuickHistory: (open: boolean) => ipcRenderer.send('ds:quick-history-toggle', open),
+  loadMoreQuickHistory: () => ipcRenderer.send('ds:quick-history-more'),
+  selectQuickHistory: (id: string) => ipcRenderer.send('ds:quick-history-select', id),
+  loadOlderQuickHistory: () => ipcRenderer.send('ds:quick-history-older'),
   setQuickMode: (mode: QuickMode) => ipcRenderer.send('ds:quick-mode', mode),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),

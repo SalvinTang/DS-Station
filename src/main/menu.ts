@@ -42,7 +42,13 @@ export function buildAppMenu(handlers: MenuHandlers): void {
         { type: 'separator' },
         { role: 'services', label: t('menu.services') },
         { type: 'separator' },
-        { role: 'hide', label: t('menu.hide', { app: appName }) },
+        /*
+         * 不用 role: 'hide'：它会把 ⌘H 绑到应用菜单上。
+         * 快捷窗口的历史快捷键默认改成 ⌘Y 后，⌘H 在快捷窗口里
+         * 仍按系统习惯隐藏应用（见 index.ts 的 before-input-event）。
+         * 保留菜单项和点击行为，只是不在菜单层占用 ⌘H。
+         */
+        { label: t('menu.hide', { app: appName }), click: () => app.hide() },
         { role: 'hideOthers', label: t('menu.hideOthers') },
         { role: 'unhide', label: t('menu.unhide') },
         { type: 'separator' },

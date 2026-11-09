@@ -6,23 +6,60 @@
  * 然后等它把 answer-start / answer-update / answer-done 推回来。
  */
 
-import type { QuickEvent, QuickMode, QuickSubmitPayload } from '../../shared/types'
+import type {
+  HistoryEntry,
+  HistoryMessage,
+  QuickEvent,
+  QuickMode,
+  QuickSubmitPayload,
+} from '../../shared/types'
+import { renderAiContent, setMarkdownLabels } from './markdown'
+import { clearMarkdownCache, renderApiMarkdown } from './markdown-render'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
 /** 一行的高度：line-height 22 + 上下 padding 各 3 */
 const TEXTAREA_MIN = 28
-/** 输入框之外的固定开销：外框描边 2 + 上下 padding 15/9 + 工具栏 36 */
-const COMPOSER_CHROME = 62
+/** 输入框之外的固定开销：外框描边 2 + 上下 padding 15/7 + 工具栏 36 */
+const COMPOSER_CHROME = 60
 /** 窗口最高 200，输入框最多占 138，再多就出滚动条 */
 const TEXTAREA_MAX = MAX_WINDOW_HEIGHT - COMPOSER_CHROME
 
 /** 设计稿（ui尺寸.html）：鼠标移出窗口 1 秒后顶栏自动消失 */
 const TOPBAR_HIDE_DELAY = 1000
 
+/** 顶栏高 40；新消息的顶端对齐到它下面 10px */
+const TOPBAR_HEIGHT = 40
+const MESSAGE_TOP_GAP = 10
+const MESSAGE_TOP_ANCHOR = TOPBAR_HEIGHT + MESSAGE_TOP_GAP
+
+/** 离顶部多少像素内就提前加载更早的历史 */
+const OLDER_TRIGGER = 150
+/**
+ * 补位空间多留一点富余：等待回答的呼吸点只有几像素高，
+ * 回答开始时它会被移除，若可滚动高度刚好卡满，scrollTop 会被浏览器夹一下，
+ * 消息就会往下漂几像素。
+ */
+const TAIL_SLACK = 16
+
 const COPY_ICON = `
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
     <path fill="currentColor" d="M6.14929 4.02032C7.11197 4.02032 7.87983 4.02016 8.49597 4.07598C9.12128 4.13269 9.65792 4.25188 10.1415 4.53106C10.7202 4.8653 11.2008 5.3459 11.535 5.92462C11.8142 6.40818 11.9334 6.94481 11.9901 7.57012C12.0459 8.18625 12.0458 8.95419 12.0458 9.9168C12.0458 10.8795 12.0459 11.6473 11.9901 12.2635C11.9334 12.8888 11.8142 13.4254 11.535 13.909C11.2008 14.4877 10.7202 14.9683 10.1415 15.3025C9.65792 15.5817 9.12128 15.7009 8.49597 15.7576C7.87984 15.8134 7.11196 15.8133 6.14929 15.8133C5.18667 15.8133 4.41874 15.8134 3.80261 15.7576C3.1773 15.7009 2.64067 15.5817 2.1571 15.3025C1.5784 14.9683 1.09778 14.4877 0.76355 13.909C0.484366 13.4254 0.365184 12.8888 0.308472 12.2635C0.252649 11.6473 0.252808 10.8795 0.252808 9.9168C0.252808 8.95418 0.252664 8.18625 0.308472 7.57012C0.365184 6.94481 0.484366 6.40818 0.76355 5.92462C1.09777 5.34589 1.57839 4.86529 2.1571 4.53106C2.64067 4.25188 3.1773 4.13269 3.80261 4.07598C4.41874 4.02017 5.18666 4.02032 6.14929 4.02032ZM6.14929 5.37774C5.16181 5.37774 4.46634 5.37761 3.92566 5.42657C3.39434 5.47472 3.07859 5.56574 2.83582 5.70587C2.4632 5.92106 2.15354 6.2307 1.93835 6.60333C1.79823 6.8461 1.70721 7.16185 1.65906 7.69317C1.6101 8.23385 1.61023 8.92933 1.61023 9.9168C1.61023 10.9043 1.61009 11.5998 1.65906 12.1404C1.70721 12.6717 1.79823 12.9875 1.93835 13.2303C2.15356 13.6029 2.46321 13.9126 2.83582 14.1277C3.07859 14.2679 3.39434 14.3589 3.92566 14.407C4.46634 14.456 5.16182 14.4559 6.14929 14.4559C7.13682 14.4559 7.83224 14.456 8.37292 14.407C8.90425 14.3589 9.21999 14.2679 9.46277 14.1277C9.83535 13.9126 10.145 13.6029 10.3602 13.2303C10.5004 12.9875 10.5914 12.6717 10.6395 12.1404C10.6885 11.5998 10.6884 10.9043 10.6884 9.9168C10.6884 8.92934 10.6885 8.23384 10.6395 7.69317C10.5914 7.16185 10.5004 6.8461 10.3602 6.60333C10.1451 6.23071 9.83536 5.92107 9.46277 5.70587C9.21999 5.56574 8.90424 5.47472 8.37292 5.42657C7.83224 5.3776 7.13682 5.37774 6.14929 5.37774ZM9.80164 0.367975C10.7638 0.367975 11.5314 0.36788 12.1473 0.423639C12.7726 0.480307 13.3093 0.598759 13.7928 0.877741C14.3717 1.21192 14.8521 1.69355 15.1864 2.27227C15.4655 2.75574 15.5857 3.29164 15.6425 3.9168C15.6983 4.53301 15.6971 5.3016 15.6971 6.26446V7.82989C15.6971 8.29264 15.6989 8.58993 15.6649 8.84844C15.4668 10.3525 14.401 11.5738 12.9833 11.9988V10.5467C13.6973 10.1903 14.2105 9.49662 14.3192 8.67169C14.3387 8.52347 14.3407 8.3358 14.3407 7.82989V6.26446C14.3407 5.27706 14.3398 4.58149 14.2909 4.04083C14.2428 3.50968 14.1526 3.19372 14.0126 2.95098C13.7974 2.57849 13.4876 2.26869 13.1151 2.05352C12.8724 1.91347 12.5564 1.82237 12.0253 1.77423C11.4847 1.72528 10.7888 1.7254 9.80164 1.7254H7.71472C6.7562 1.72558 5.92665 2.27697 5.52332 3.07891H4.07019C4.54221 1.51132 5.9932 0.368186 7.71472 0.367975H9.80164Z" />
+  </svg>`
+
+/** 默认发送图标（向上箭头）。HTML 里也有一份，状态切换时用这里覆盖 */
+const SEND_ICON = `
+  <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
+    <path
+      fill="currentColor"
+      d="M9.551 0.39c0.301-0.046 0.597-0.035 0.898 0 0.511 0.1 0.958 0.306 1.366 0.619 0.323 0.247 0.672 0.582 1.03 0.923l6.796 6.472-2.033 1.936-6.171-5.877v15.177h-2.875V4.463L2.391 10.341 0.359 8.405 7.154 1.932C7.513 1.591 7.862 1.256 8.185 1.009 8.529 0.745 8.971 0.477 9.551 0.39z"
+    />
+  </svg>`
+
+/** 生成中的停止图标：白色圆角方块（设计稿 30px 圆内 10×10，圆角 2） */
+const STOP_ICON = `
+  <svg viewBox="0 0 30 30" width="30" height="30" aria-hidden="true">
+    <rect x="10" y="10" width="10" height="10" rx="2" fill="currentColor" />
   </svg>`
 
 const DONE_ICON = `
@@ -48,10 +85,19 @@ function t(key: string, vars?: Record<string, string | number>): string {
 function applyMessages(): void {
   input.placeholder = t('quick.placeholder')
 
+  // 胶囊里显示的是短标签，完整名称留在 title / aria-label
+  if (deepThinkLabel) deepThinkLabel.textContent = t('quick.deepThinkShort')
+  if (smartSearchLabel) smartSearchLabel.textContent = t('quick.smartSearchShort')
+  if (historyLabel) historyLabel.textContent = t('quick.history')
+  if (historyEmpty) historyEmpty.textContent = t('quick.noHistory')
+  setMarkdownLabels({ copyCode: t('quick.copyCode') })
+
   const labelled: [Element | null, string][] = [
     [deepThinkButton, 'quick.deepThink'],
     [smartSearchButton, 'quick.smartSearch'],
+    [historyButton, 'quick.history'],
     [sendButton, 'quick.send'],
+    [scrollBottomButton, 'quick.scrollBottom'],
     [tbClose, 'quick.close'],
     [tbNewChat, 'quick.newChat'],
     [tbExpand, 'quick.expand'],
@@ -61,6 +107,9 @@ function applyMessages(): void {
     element.setAttribute('title', t(key))
     element.setAttribute('aria-label', t(key))
   }
+
+  // 上面把发送按钮的 title 固定成了「发送」，生成中要改回「停止生成」
+  syncSendState()
 }
 
 async function loadMessages(): Promise<void> {
@@ -72,21 +121,70 @@ const app = document.getElementById('app') as HTMLElement
 const topbar = document.getElementById('topbar') as HTMLElement
 const messages = document.getElementById('messages') as HTMLElement
 const messagesInner = document.getElementById('messagesInner') as HTMLElement
+const messagesTail = document.getElementById('messagesTail') as HTMLElement
+const messagesFade = document.getElementById('messagesFade') as HTMLElement
+const composer = document.querySelector('.composer') as HTMLElement
 
 const input = document.getElementById('input') as HTMLTextAreaElement
 const deepThinkButton = document.getElementById('deepThink')
 const smartSearchButton = document.getElementById('smartSearch')
+const deepThinkLabel = document.getElementById('deepThinkLabel')
+const smartSearchLabel = document.getElementById('smartSearchLabel')
 const sendButton = document.getElementById('send') as HTMLButtonElement
+const scrollBottomButton = document.getElementById('scrollBottom') as HTMLButtonElement
+
+const historyButton = document.getElementById('history') as HTMLButtonElement
+const historyLabel = document.getElementById('historyLabel')
+const historyPanel = document.getElementById('historyPanel') as HTMLElement
+const historyList = document.getElementById('historyList') as HTMLElement
+const historyEmpty = document.getElementById('historyEmpty') as HTMLElement
+const historyLoader = document.getElementById('historyLoader') as HTMLElement
 
 const tbClose = document.getElementById('tbClose')
 const tbNewChat = document.getElementById('tbNewChat')
 const tbExpand = document.getElementById('tbExpand')
 
 let mode: QuickMode = 'empty'
+/** 历史弹框是否展开 */
+let historyOpen = false
+/** 通过快捷键打开历史弹框时，等列表回来后默认选中第一条 */
+let historyKeyboardSelect = false
+/** 当前键盘选中的历史条目下标，-1 表示没有选中 */
+let historySelectedIndex = -1
+/** 历史列表还能不能继续加载 */
+let historyHasMore = false
+/** 已经请求过「加载更多」，等主进程回话 */
+let historyLoadPending = false
+/** 收起动画结束后再隐藏弹框的定时器 */
+let historyHideTimer: number | undefined
+/** 正在等主进程把选中的历史对话读回来（这期间不让发送） */
+let historyLoading = false
+/** 历史对话加载后的落点，等布局稳定（字体/图片/窗口动画）再对齐一次 */
+let historyLandingGroup: HTMLElement | null = null
+/** 窗口展开动画期间还有历史落点要在动画结束后校正 */
+let historyLandingPending = false
+/** 接口返回的完整历史（只渲染首屏需要的部分，其余留在内存里） */
+let historyAllMessages: HistoryMessage[] | null = null
+/** 历史首屏渲染的世代号，切换会话后让旧的延迟渲染失效 */
+let historyRenderEpoch = 0
+/** 首屏两页缓冲正在后台渲染，避免和用户滚动触发的懒加载并发 */
+let historyPrefillRunning = false
+/** historyAllMessages 里当前已经渲染到第几条 */
+let historyRenderedStart = 0
+/** 历史对话是否还有更早的消息可以加载 */
+let historyHasOlder = false
+/** 正在加载更早的历史消息 */
+let historyOlderLoading = false
+/** 用户已经主动滚动过，才允许触发按需加载 */
+let historyLazyArmed = false
+/** 已经渲染过的历史条目，用来去重 */
+const historySeen = new Set<string>()
 /** 拖动窗口：按下时的鼠标屏幕坐标 */
 let dragOrigin: { x: number; y: number } | null = null
-/** 正在等回答：这期间禁止再次发送 */
+/** 正在等回答：这期间发送按钮变成「停止生成」 */
 let busy = false
+/** 已经点了停止、还没收到主进程的 answer-stopped，避免连点 */
+let stopping = false
 /** 当前正在流式更新的那条回答 */
 let streamingBody: HTMLElement | null = null
 /** 等待回答时的呼吸点占位 */
@@ -113,10 +211,27 @@ function autosize(): void {
     )
     window.ds?.resizeQuickWindow(windowHeight)
   }
+
+  if (historyOpen) placeHistoryPanel()
+  placeMessagesFade()
 }
 
+/** 当前发送按钮是不是「停止」形态，避免每次输入都重写 innerHTML */
+let sendIconIsStop = false
+
 function syncSendState(): void {
-  sendButton.disabled = busy || input.value.trim().length === 0
+  if (busy !== sendIconIsStop) {
+    sendIconIsStop = busy
+    sendButton.innerHTML = busy ? STOP_ICON : SEND_ICON
+  }
+
+  const key = busy ? 'quick.stop' : 'quick.send'
+  sendButton.setAttribute('title', t(key))
+  sendButton.setAttribute('aria-label', t(key))
+
+  // 生成中：发送按钮就是停止按钮，始终可点
+  // 空闲时：没有内容、或正在加载历史对话就禁用
+  sendButton.disabled = historyLoading || (!busy && input.value.trim().length === 0)
 }
 
 /**
@@ -138,10 +253,296 @@ function togglePressed(element: Element | null): void {
   element?.setAttribute('aria-pressed', String(!isPressed(element)))
 }
 
+// ── 历史对话弹框 ─────────────────────────────────────────────
+
+/** 把弹框贴到输入框正上方（输入框高度变化时也要重新算） */
+/** 底部渐隐蒙层：底边贴住输入框顶部，输入框长高时跟着上移 */
+function placeMessagesFade(): void {
+  const appRect = app.getBoundingClientRect()
+  const composerRect = composer.getBoundingClientRect()
+  const appBottom = appRect.top + app.clientTop + app.clientHeight
+  messagesFade.style.bottom = `${Math.round(appBottom - composerRect.top)}px`
+}
+
+function placeHistoryPanel(): void {
+  const appRect = app.getBoundingClientRect()
+  const buttonRect = historyButton.getBoundingClientRect()
+  const width = 206
+  const center = buttonRect.left + buttonRect.width / 2
+
+  // 设计稿：气泡贴在「历史」按钮正上方，尾巴指向按钮
+  const left = Math.min(
+    Math.max(center - appRect.left - width / 2, 4),
+    appRect.width - width - 4,
+  )
+  historyPanel.style.left = `${Math.round(left)}px`
+  // 尾巴尖离气泡底边约 12px，正好落在胶囊上沿
+  historyPanel.style.bottom = `${Math.round(appRect.bottom - buttonRect.top + 12)}px`
+
+  const tail = Math.min(Math.max(center - appRect.left - left - 7, 10), width - 22)
+  historyPanel.style.setProperty('--tail-x', `${Math.round(tail)}px`)
+
+  // 有内容态可能被用户缩得很矮：气泡不能顶出窗口
+  const available = buttonRect.top - appRect.top - 20
+  historyPanel.style.maxHeight = `${Math.round(Math.max(120, Math.min(166, available)))}px`
+}
+
+/**
+ * 只改界面，不通知主进程。
+ * 主进程推来的 history-panel 也走这里，避免两边来回调用。
+ */
+function applyHistoryPanel(open: boolean): void {
+  if (open === historyOpen) {
+    if (open) placeHistoryPanel()
+    return
+  }
+
+  historyOpen = open
+  historyButton.setAttribute('aria-pressed', String(open))
+
+  if (open) {
+    /*
+     * 空态窗口会临时撑高到 230，composer 必须固定 100 高贴在底部。
+     * 关闭时不能立刻去掉这个类：窗口还有 260ms 的收起缓冲期，
+     * 提前去掉 composer 会先撑满整个窗口，看起来就是「变大再变小」。
+     * 类由下面的 window resize 处理：窗口真正缩回 100 后再移除。
+     */
+    if (mode === 'empty') app.classList.add('history-open')
+    if (historyHideTimer !== undefined) {
+      window.clearTimeout(historyHideTimer)
+      historyHideTimer = undefined
+    }
+
+    /*
+     * 连续开合时保留上一次的列表，不先清空再等接口。
+     * 只有第一次打开（列表为空）才用 loading 占住高度。
+     */
+    historyLoadPending = false
+    historyHasMore = false
+    historySeen.clear()
+    historyPanel.classList.remove('empty')
+    historyPanel.classList.toggle('loading', historyList.children.length === 0)
+
+    historyPanel.hidden = false
+    placeHistoryPanel()
+    // 列表可能还是上一次的；快捷键打开时先把第一条选中
+    if (historyList.children.length > 0) applyPendingHistorySelection()
+    requestAnimationFrame(() => {
+      // 这一帧之前用户又关掉了，就不要再打开，否则会闪一下
+      if (!historyOpen) return
+      placeHistoryPanel()
+      historyPanel.classList.add('open')
+    })
+    return
+  }
+
+  historyPanel.classList.remove('open')
+  historyKeyboardSelect = false
+  clearHistorySelection()
+  historyLoadPending = false
+  historyHasMore = false
+  // 保留列表 DOM，下次打开可以立即显示；淡出动画结束后再真正藏起来
+  if (historyHideTimer !== undefined) window.clearTimeout(historyHideTimer)
+  historyHideTimer = window.setTimeout(() => {
+    historyHideTimer = undefined
+    if (!historyOpen) historyPanel.hidden = true
+  }, 160)
+}
+
+function historyItemElements(): HTMLButtonElement[] {
+  return Array.from(historyList.querySelectorAll('.history-item')) as HTMLButtonElement[]
+}
+
+function clearHistorySelection(): void {
+  historySelectedIndex = -1
+  for (const item of historyItemElements()) item.classList.remove('selected')
+}
+
+function setHistorySelection(index: number, scroll = true): void {
+  const items = historyItemElements()
+  if (!items.length) {
+    historySelectedIndex = -1
+    return
+  }
+
+  const next = Math.max(0, Math.min(items.length - 1, index))
+  items.forEach((item, itemIndex) => item.classList.toggle('selected', itemIndex === next))
+  historySelectedIndex = next
+  if (scroll) items[next]?.scrollIntoView({ block: 'nearest' })
+}
+
+/** 列表刷新后恢复键盘选中状态；快捷键打开时默认第一条 */
+function applyPendingHistorySelection(): void {
+  if (historyKeyboardSelect && historyList.children.length > 0) {
+    historyKeyboardSelect = false
+    setHistorySelection(0)
+    return
+  }
+
+  if (historySelectedIndex >= 0) setHistorySelection(historySelectedIndex, false)
+}
+
+function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
+  if (!append) {
+    /*
+     * 连续开合时接口很快会返回同一份列表。
+     * 内容和顺序都没变就不要再重建 DOM —— 重建会让列表闪一下。
+     */
+    const current = Array.from(historyList.children) as HTMLElement[]
+    const same =
+      current.length === items.length &&
+      items.every((item, index) => {
+        const button = current[index]
+        return button?.dataset.id === item.id && button.textContent === item.title
+      })
+
+    if (same) {
+      historySeen.clear()
+      for (const item of items) historySeen.add(item.id)
+      historyPanel.classList.remove('loading')
+      historyPanel.classList.toggle('empty', items.length === 0)
+      placeHistoryPanel()
+      applyPendingHistorySelection()
+      return
+    }
+
+    historyList.replaceChildren()
+    historyList.scrollTop = 0
+    historySeen.clear()
+  }
+
+  for (const item of items) {
+    if (historySeen.has(item.id)) continue
+    historySeen.add(item.id)
+
+    const button = document.createElement('button')
+    button.type = 'button'
+    button.className = 'history-item'
+    button.dataset.id = item.id
+    button.textContent = item.title
+    // 条目本身已经被 CSS 截断，悬停时给出完整标题
+    button.title = item.title
+    button.addEventListener('click', () => {
+      applyHistoryPanel(false)
+      window.ds?.selectQuickHistory(item.id)
+    })
+    historyList.appendChild(button)
+  }
+
+  historyPanel.classList.remove('loading')
+  historyPanel.classList.toggle('empty', historyList.children.length === 0)
+  placeHistoryPanel()
+  if (!append) applyPendingHistorySelection()
+}
+
+/** 点「历史」胶囊：先给反馈，再让主进程去页面里读 */
+function requestHistoryToggle(): void {
+  if (historyOpen) {
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+    return
+  }
+  if (busy || stopping || historyLoading) return
+
+  applyHistoryPanel(true)
+  window.ds?.toggleQuickHistory(true)
+}
+
 // ── 消息渲染 ──────────────────────────────────────────────────
 
-function scrollToBottom(): void {
-  messages.scrollTop = messages.scrollHeight
+/** 距离底部 4px 以内算「已经在底部」 */
+const BOTTOM_EPSILON = 4
+
+/**
+ * 消息内容的底边（不含 messagesTail 补位）在滚动坐标系里的位置。
+ * 用 rect 而不是 scrollHeight —— 内容比视口短时 scrollHeight 会被夹到视口高度。
+ */
+function contentBottom(): number {
+  const containerTop = messages.getBoundingClientRect().top
+  return messagesInner.getBoundingClientRect().bottom - containerTop + messages.scrollTop
+}
+
+function isAtBottom(): boolean {
+  return contentBottom() - (messages.scrollTop + messages.clientHeight) <= BOTTOM_EPSILON
+}
+
+/**
+ * 程序触发的平滑滚动期间先别让「滚动到底部」按钮冒出来：
+ * 用户点按钮时它应该立刻消失，而不是跟着滚到底部才消失；
+ * 新消息往上滚的动画过程中也不应该闪一下。
+ */
+let suppressScrollButton = false
+let suppressScrollTimer: number | undefined
+
+function suppressScrollButtonDuringAnimation(): void {
+  suppressScrollButton = true
+  scrollBottomButton.classList.remove('show')
+  if (suppressScrollTimer) window.clearTimeout(suppressScrollTimer)
+  // scrollend 没触发时兜底（smooth 滚动一般 300–500ms）
+  suppressScrollTimer = window.setTimeout(() => {
+    suppressScrollButton = false
+    suppressScrollTimer = undefined
+    updateScrollButton()
+  }, 1200)
+}
+
+/** 设计稿（优化内容展示）：不在底部时浮出「滚动到底部」按钮。
+ * 生成文字时**不自动跟随**，所以新内容长出来之后这个按钮会重新出现。
+ */
+function updateScrollButton(): void {
+  if (suppressScrollButton) {
+    scrollBottomButton.classList.remove('show')
+    return
+  }
+  const scrollable = contentBottom() - messages.clientHeight > 8
+  scrollBottomButton.classList.toggle('show', mode === 'content' && scrollable && !isAtBottom())
+}
+
+/**
+ * 把刚发出的用户消息顶到「顶栏下方 10px」。
+ *
+ * 内容底部不够长时，光滚动是到不了那个位置的（滚动会夹在底部），
+ * 所以先用 messagesTail 在下面补足一段空白，回答结束再收回。
+ *
+ * animate：第二条及以后的消息，先让气泡出现在可视区底部，再平滑滚上去，
+ * 避免内容一下子「跳」到顶部。
+ */
+function alignMessageToTop(group: HTMLElement, animate: boolean): void {
+  messagesTail.style.height = '0px'
+
+  const messageTop =
+    group.getBoundingClientRect().top - messages.getBoundingClientRect().top + messages.scrollTop
+  const below = messagesInner.getBoundingClientRect().bottom - group.getBoundingClientRect().bottom
+  // 视图里消息下方还要放得下「消息自身 + 后面的内容」
+  const needed = messages.clientHeight - MESSAGE_TOP_ANCHOR - group.offsetHeight - below
+  if (needed > 0) messagesTail.style.height = `${needed + TAIL_SLACK}px`
+
+  const target = Math.max(0, messageTop - MESSAGE_TOP_ANCHOR)
+
+  if (!animate) {
+    // 空态发出的第一条：窗口还在展开，直接落位即可
+    messages.scrollTop = target
+    return
+  }
+
+  // 新消息先出现在内容底部（视口最下方），下一帧再平滑滚到顶部
+  suppressScrollButtonDuringAnimation()
+  messages.scrollTop = Math.max(0, contentBottom() - messages.clientHeight)
+  requestAnimationFrame(() => {
+    messages.scrollTo({ top: target, behavior: 'smooth' })
+  })
+}
+
+/**
+ * 回答结束：尽量收回补位空间。
+ *
+ * 只收到「不会让当前视图被夹走」的程度 —— 如果回答很短、内容底部撑不满视口，
+ * 全部收回会让浏览器把 scrollTop 夹到新的最大值，用户刚顶到上面的消息会往下跳。
+ * 留刚好够的那一点点空白，视图就保持不动。
+ */
+function releaseTail(): void {
+  const keep = messages.scrollTop + messages.clientHeight - contentBottom()
+  messagesTail.style.height = `${Math.max(0, keep)}px`
 }
 
 function makeCopyButton(read: () => string): HTMLButtonElement {
@@ -182,35 +583,211 @@ async function copyText(text: string, button: HTMLButtonElement): Promise<void> 
   focusInput()
 }
 
-function appendMessage(kind: 'user' | 'ai', text: string): HTMLElement {
+function buildMessageGroup(
+  kind: 'user' | 'ai',
+  text: string,
+  html?: string,
+  markdown?: string,
+  messageKey?: string,
+): { group: HTMLElement; body: HTMLElement } {
   const group = document.createElement('div')
-  group.className = 'msg-group'
+  // 用户提问 / AI 回答各自是一个独立的组，上下边距不同
+  group.className = `msg-group msg-group-${kind}`
 
   const template = document.getElementById(kind === 'user' ? 'tplUser' : 'tplAi')
   if (template instanceof HTMLTemplateElement) group.appendChild(template.content.cloneNode(true))
 
   const body = group.querySelector(kind === 'user' ? '.bubble' : '.body') as HTMLElement
-  body.textContent = text
+  if (kind === 'ai') {
+    if (markdown) {
+      renderApiMarkdown(body, markdown, messageKey)
+    } else {
+      renderAiContent(body, text, html)
+    }
+  } else {
+    body.textContent = text
+  }
 
   const actions = group.querySelector('.msg-actions') as HTMLElement
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
 
+  return { group, body }
+}
+
+function appendMessage(
+  kind: 'user' | 'ai',
+  text: string,
+  html?: string,
+  markdown?: string,
+  messageKey?: string,
+): HTMLElement {
+  const { group, body } = buildMessageGroup(kind, text, html, markdown, messageKey)
   messagesInner.appendChild(group)
-  scrollToBottom()
+  updateScrollButton()
   return body
+}
+
+/**
+ * 把更早的历史消息插到列表顶部。
+ * 插入前后补滚动高度，保证用户当前看到的内容不跳。
+ */
+function prependMessages(history: HistoryMessage[]): void {
+  if (!history.length) return
+
+  const oldHeight = messages.scrollHeight
+  const oldTop = messages.scrollTop
+
+  const fragment = document.createDocumentFragment()
+  for (const message of history) {
+    const { group } = buildMessageGroup(
+      message.role === 'user' ? 'user' : 'ai',
+      message.text,
+      message.html,
+      message.markdown,
+    )
+    fragment.appendChild(group)
+  }
+  messagesInner.insertBefore(fragment, messagesInner.firstChild)
+
+  messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+  updateScrollButton()
+}
+
+/** 消息区一页的高度（动态，跟随窗口大小） */
+function historyPageHeight(): number {
+  return Math.max(200, messages.clientHeight || 400)
+}
+
+function prependOneHistoryMessage(message: HistoryMessage): void {
+  const { group } = buildMessageGroup(
+    message.role === 'user' ? 'user' : 'ai',
+    message.text,
+    message.html,
+    message.markdown,
+    message.key,
+  )
+  messagesInner.insertBefore(group, messagesInner.firstChild)
+}
+
+/**
+ * 接口历史首屏渲染：
+ * 先完整渲染最后一组问答；如果不足两页，再向上补更早的消息到两页。
+ */
+function renderApiHistoryInitial(
+  all: HistoryMessage[],
+): { all: HistoryMessage[]; lastUser: number } {
+  historyAllMessages = all
+
+  let lastUser = -1
+  for (let i = all.length - 1; i >= 0; i -= 1) {
+    if (all[i].role === 'user') {
+      lastUser = i
+      break
+    }
+  }
+  if (lastUser < 0) lastUser = Math.max(0, all.length - 1)
+
+  // 第一阶段：只渲染最后一组；更早的两页缓冲等首屏画完再补
+  for (let i = lastUser; i < all.length; i += 1) {
+    const message = all[i]
+    appendMessage(
+      message.role === 'user' ? 'user' : 'ai',
+      message.text,
+      message.html,
+      message.markdown,
+      message.key,
+    )
+  }
+
+  historyRenderedStart = lastUser
+  historyHasOlder = lastUser > 0
+  return { all, lastUser }
+}
+
+/**
+ * 第二阶段：首屏画完后，在后台把更早的两页缓冲补到顶部。
+ * 每次 prepend 都补偿滚动高度，最后一条用户消息保持在原来的位置。
+ */
+function renderApiHistoryOlderBuffer(epoch: number, all: HistoryMessage[], lastUser: number): void {
+  if (epoch !== historyRenderEpoch || historyAllMessages !== all) {
+    historyPrefillRunning = false
+    return
+  }
+
+  const limit = historyPageHeight() * 2
+  let renderedStart = lastUser
+
+  while (renderedStart > 0 && messagesInner.offsetHeight < limit) {
+    const index = renderedStart - 1
+    const oldHeight = messages.scrollHeight
+    const oldTop = messages.scrollTop
+    prependOneHistoryMessage(all[index])
+    messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+    renderedStart = index
+  }
+
+  historyRenderedStart = renderedStart
+  historyHasOlder = renderedStart > 0
+  historyPrefillRunning = false
+  updateScrollButton()
+}
+
+/** 从内存里的完整历史中，向上渲染一批（一页） */
+function renderOlderFromMemory(): void {
+  const all = historyAllMessages
+  if (!all || historyRenderedStart <= 0) {
+    historyHasOlder = false
+    historyOlderLoading = false
+    historyLoader.hidden = true
+    return
+  }
+
+  const page = historyPageHeight()
+  const oldHeight = messages.scrollHeight
+  const oldTop = messages.scrollTop
+  let start = historyRenderedStart
+
+  while (start > 0) {
+    const index = start - 1
+    prependOneHistoryMessage(all[index])
+    start = index
+    if (messages.scrollHeight - oldHeight >= page) break
+  }
+
+  historyRenderedStart = start
+  messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+  historyHasOlder = start > 0
+  historyOlderLoading = false
+  historyLoader.hidden = true
+  updateScrollButton()
+}
+
+/** 滚到顶部后按需加载更早的一批消息 */
+function requestOlderHistory(): void {
+  if (!historyHasOlder || historyOlderLoading || historyPrefillRunning) return
+  historyOlderLoading = true
+  historyLoader.hidden = false
+
+  if (historyAllMessages) {
+    // 接口路径：数据都在内存里，只差渲染
+    requestAnimationFrame(() => renderOlderFromMemory())
+    return
+  }
+
+  window.ds?.loadOlderQuickHistory()
 }
 
 function addThinking(): void {
   if (thinkingEl) return
   const group = document.createElement('div')
-  group.className = 'msg-group'
+  // 等待动画占的是「AI 回答组」的位置，上边距和回答保持一致
+  group.className = 'msg-group msg-group-thinking'
   const box = document.createElement('div')
   box.className = 'thinking'
   box.innerHTML = '<i></i><i></i><i></i>'
   group.appendChild(box)
   messagesInner.appendChild(group)
   thinkingEl = group
-  scrollToBottom()
 }
 
 function removeThinking(): void {
@@ -219,9 +796,76 @@ function removeThinking(): void {
 }
 
 function clearMessages(): void {
+  historyLandingGroup = null
+  historyHasOlder = false
+  historyOlderLoading = false
+  historyLazyArmed = false
+  historyAllMessages = null
+  historyRenderedStart = 0
+  historyPrefillRunning = false
+  historyLandingPending = false
+  historyLoader.hidden = true
   messagesInner.replaceChildren()
+  messagesTail.style.height = '0px'
   streamingBody = null
   thinkingEl = null
+  continueButton = null
+}
+
+// ── 「继续生成」按钮 ─────────────────────────────────────────
+
+/** 当前位置上的「继续生成」胶囊（只有最新一条被截断的回答才有） */
+let continueButton: HTMLButtonElement | null = null
+/** 继续生成时复用的那条 AI 气泡（避免在下面再多出一个重复气泡） */
+let continueBody: HTMLElement | null = null
+
+function hideContinueButton(): void {
+  if (!continueButton) return
+  const actions = continueButton.parentElement
+  continueButton.remove()
+  actions?.classList.remove('has-continue')
+  continueButton = null
+  continueBody = null
+}
+
+/**
+ * 在最后一条 AI 回答下方挂出「继续生成」。
+ * 操作行原本只有左侧的复制按钮，这里加一个右侧的胶囊。
+ */
+function showContinueButton(): void {
+  hideContinueButton()
+
+  const groups = messagesInner.querySelectorAll('.msg-group')
+  const last = groups[groups.length - 1] as HTMLElement | undefined
+  if (!last) return
+
+  const actions = last.querySelector('.msg-actions:not(.right)') as HTMLElement | null
+  if (!actions) return
+
+  const body = last.querySelector('.msg-ai .body') as HTMLElement | null
+  if (!body) return
+
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'continue-btn'
+  button.textContent = t('quick.continue')
+  button.addEventListener('click', () => {
+    // 续写的结果是「同一条回答继续变长」，直接复用这条气泡，
+    // 不要再多挂一条重复的 AI 消息
+    const target = continueBody
+    hideContinueButton()
+    streamingBody = target
+    busy = true
+    stopping = false
+    syncSendState()
+    window.ds?.continueQuickGeneration()
+  })
+
+  actions.classList.add('has-continue')
+  actions.appendChild(button)
+  continueButton = button
+  continueBody = body
+  updateScrollButton()
 }
 
 // ── 形态切换 ──────────────────────────────────────────────────
@@ -232,11 +876,13 @@ function clearMessages(): void {
  */
 function applyMode(next: QuickMode): void {
   if (mode === next) return
+  if (historyOpen) applyHistoryPanel(false)
   mode = next
   app.dataset.mode = next
 
   if (next === 'empty') {
     busy = false
+    historyLoading = false
     clearMessages()
     topbar.classList.remove('show')
     app.classList.remove('content-enter')
@@ -246,6 +892,11 @@ function applyMode(next: QuickMode): void {
 
   autosize()
   syncSendState()
+  // 布局要等一帧才稳定（展开动画期间高度在变）
+  requestAnimationFrame(() => {
+    updateScrollButton()
+    placeMessagesFade()
+  })
 }
 
 function switchToContent(): void {
@@ -262,12 +913,20 @@ function resetToEmpty(): void {
 
 function submit(): void {
   const text = input.value.trim()
-  if (!text || busy) return
+  // stopping：已经点了停止，等主进程确认前不要发下一条
+  if (!text || busy || stopping || historyLoading) return
+
+  // 发了新消息，上一条被截断的回答就不能再继续了
+  hideContinueButton()
+  if (historyOpen) {
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+  }
 
   /*
-   * 空态 → 有内容态：主进程会把窗口下移再向上长高。
-   * 这期间先把内容藏起来，等主进程发来 transition-done 再淡入 ——
-   * 效果就是「外框先撑开，内容再出现」。
+   * 空态 → 有内容态。
+   * 动效暂时关闭：主进程直接切到最终窗口，内容也跟着直接出现。
+   * 恢复动效时取消下面 content-enter 那段注释即可。
    */
   const enteringContent = mode === 'empty'
 
@@ -279,16 +938,26 @@ function submit(): void {
     startNewChat: enteringContent,
   }
 
-  if (enteringContent) {
-    app.classList.add('content-enter')
-    // 兜底：万一没收到 transition-done，也不要把内容永久藏着
-    window.setTimeout(() => app.classList.remove('content-enter'), 1500)
-  }
+  /*
+   * 动效暂时关闭，直接展示最终效果：
+   *
+   * if (enteringContent) {
+   *   app.classList.add('content-enter')
+   *   // 兜底：万一没收到 transition-done，也不要把内容永久藏着
+   *   window.setTimeout(() => app.classList.remove('content-enter'), 1500)
+   * }
+   */
 
   // 先把反馈给到用户：切形态 + 画出自己那条气泡，然后再等回答
   switchToContent()
-  appendMessage('user', text)
+  const bubble = appendMessage('user', text)
   addThinking()
+
+  // 新消息顶到「顶栏下方 10px」，每次发消息都能从最上面开始看
+  const group = bubble.closest('.msg-group') as HTMLElement | null
+  // 第一条（空态→有内容态）不做滚动动画，直接落位
+  if (group) alignMessageToTop(group, !enteringContent)
+  updateScrollButton()
 
   busy = true
   input.value = ''
@@ -307,20 +976,54 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'answer-update': {
       removeThinking()
       if (streamingBody) {
-        streamingBody.textContent = event.text
+        renderAiContent(streamingBody, event.text, event.html)
       } else {
-        streamingBody = appendMessage('ai', event.text)
+        streamingBody = appendMessage('ai', event.text, event.html)
       }
-      scrollToBottom()
+      // 设计稿：生成过程中不自动滚动，只更新「滚动到底部」按钮
+      updateScrollButton()
       break
     }
 
     case 'answer-done': {
       removeThinking()
+      releaseTail()
+      streamingBody = null
+      busy = false
+      stopping = false
+      hideContinueButton()
+      syncSendState()
+      updateScrollButton()
+      // 回答结束，光标回到输入框
+      focusInput()
+      break
+    }
+
+    case 'answer-stopped': {
+      const wasStopping = stopping
+      stopping = false
+
+      if (!event.stopped) {
+        /*
+         * 停止没生效，页面其实还在生成：
+         * 把按钮恢复成停止态，继续等回答更新。
+         * 如果这期间回答已经自己结束了（wasStopping 已被清掉），就不用管。
+         */
+        if (wasStopping) {
+          busy = true
+          syncSendState()
+        }
+        break
+      }
+
+      removeThinking()
+      releaseTail()
       streamingBody = null
       busy = false
       syncSendState()
-      // 回答结束，光标回到输入框
+      // DeepSeek 只有最新一条被截断的回答会给出「继续生成」
+      if (event.canContinue) showContinueButton()
+      updateScrollButton()
       focusInput()
       break
     }
@@ -335,26 +1038,176 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'transition-done': {
       // 展开动画结束，内容淡入
       app.classList.remove('content-enter')
+      placeMessagesFade()
+
+      // 历史对话的落点：窗口动画结束后再精确对齐一次最后一条用户消息
+      if (historyLandingPending && mode === 'content') {
+        const users = messagesInner.querySelectorAll('.msg-user')
+        const lastUser = users[users.length - 1] as HTMLElement | undefined
+        const group = lastUser?.closest('.msg-group') as HTMLElement | null
+        if (group) alignMessageToTop(group, false)
+        updateScrollButton()
+        historyLandingPending = false
+      }
       break
     }
 
     case 'conversation-cleared': {
+      // 退出登录：释放历史对话的 Markdown HTML 缓存
+      clearMarkdownCache()
       resetToEmpty()
       break
     }
 
     case 'error': {
       removeThinking()
+      releaseTail()
       streamingBody = null
+      historyLoading = false
       busy = false
+      stopping = false
       appendMessage('ai', `${t('quick.error')}：${event.message}`)
+      syncSendState()
+      updateScrollButton()
+      break
+    }
+
+    case 'history-shortcut': {
+      if (busy || stopping || historyLoading) break
+      if (historyOpen) {
+        applyHistoryPanel(false)
+        window.ds?.toggleQuickHistory(false)
+        break
+      }
+      historyKeyboardSelect = true
+      requestHistoryToggle()
+      break
+    }
+
+    case 'history-panel': {
+      applyHistoryPanel(event.open)
+      break
+    }
+
+    case 'history-list': {
+      if (!historyOpen) break
+      renderHistoryItems(event.items, event.append)
+      historyHasMore = event.hasMore
+      historyLoadPending = false
+      break
+    }
+
+    case 'history-start': {
+      applyHistoryPanel(false)
+      clearMessages()
+      addThinking()
+      historyLoading = true
+      historyHasOlder = false
+      historyOlderLoading = false
+      historyLazyArmed = false
+      historyAllMessages = null
+      historyRenderedStart = 0
+      historyLoader.hidden = true
+      busy = false
+      stopping = false
       syncSendState()
       break
     }
 
-    case 'answer-start':
-      // 呼吸点已经在提交时就放好了
+    case 'history-loaded': {
+      removeThinking()
+      historyLoader.hidden = true
+      historyRenderEpoch += 1
+      clearMessages()
+      historyAllMessages = null
+      historyRenderedStart = 0
+      historyPrefillRunning = false
+
+      if (event.source === 'api') {
+        const plan = renderApiHistoryInitial(event.messages)
+        const epoch = historyRenderEpoch
+        historyPrefillRunning = true
+        // 双 rAF：先让最后一组完成一次绘制，再补两页缓冲
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            renderApiHistoryOlderBuffer(epoch, plan.all, plan.lastUser)
+          })
+        })
+      } else {
+        for (const message of event.messages) {
+          appendMessage(
+            message.role === 'user' ? 'user' : 'ai',
+            message.text,
+            message.html,
+            message.markdown,
+            message.key,
+          )
+        }
+        historyHasOlder = event.hasOlder
+      }
+
+      historyLoading = false
+      historyOlderLoading = false
+      historyLazyArmed = false
+      historyLandingPending = true
+      busy = false
+      stopping = false
+      syncSendState()
+
+      /*
+       * 进入历史对话后的落点：最后一条用户消息的气泡顶端对齐到
+       * 「顶栏下方 10px」—— 和空态发第一条消息时的位置一致。
+       * 这样能先看清自己最后问了什么，再往下看回答。
+       */
+      requestAnimationFrame(() => {
+        const users = messagesInner.querySelectorAll('.msg-user')
+        const lastUser = users[users.length - 1] as HTMLElement | undefined
+        const group = lastUser?.closest('.msg-group') as HTMLElement | null
+        if (mode === 'content' && group) {
+          alignMessageToTop(group, false)
+          // 等字体/图片/代码块和窗口展开动画都稳定后再对齐一次，
+          // 防止后面的内容把气泡顶偏
+          const landingGroup = group
+          const landingScrollTop = messages.scrollTop
+          historyLandingGroup = group
+          window.setTimeout(() => {
+            if (historyLandingGroup !== landingGroup || !landingGroup.isConnected) return
+            if (mode !== 'content') return
+            // 用户已经自己滚动过，就不要再抢位置
+            if (Math.abs(messages.scrollTop - landingScrollTop) > 2) {
+              historyLandingGroup = null
+              return
+            }
+            alignMessageToTop(landingGroup, false)
+            updateScrollButton()
+            historyLandingGroup = null
+            historyLandingPending = false
+          }, 450)
+        } else {
+          messages.scrollTop = messages.scrollHeight
+        }
+        updateScrollButton()
+        focusInput()
+      })
       break
+    }
+
+    case 'history-prepended': {
+      prependMessages(event.messages)
+      historyHasOlder = event.hasOlder
+      historyOlderLoading = false
+      historyLoader.hidden = true
+      break
+    }
+
+    case 'answer-start': {
+      // 提交时已经放过呼吸点；继续生成时这里负责切回「停止」态
+      busy = true
+      stopping = false
+      hideContinueButton()
+      syncSendState()
+      break
+    }
   }
 })
 
@@ -366,6 +1219,12 @@ input.addEventListener('input', () => {
 })
 
 input.addEventListener('keydown', (event) => {
+  // 历史弹框展开时，回车留给列表确认，不要发送消息
+  if (historyOpen) {
+    if (event.key === 'Enter') event.preventDefault()
+    return
+  }
+
   // isComposing：中文输入法选词时的回车不能当成发送
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
@@ -373,13 +1232,152 @@ input.addEventListener('keydown', (event) => {
   }
 })
 
+// 历史弹框展开时：上下键切换，回车确认
+document.addEventListener('keydown', (event) => {
+  if (!historyOpen) return
+
+  const items = historyItemElements()
+  if (!items.length) return
+
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (historySelectedIndex < 0) {
+      setHistorySelection(0)
+    } else {
+      setHistorySelection(historySelectedIndex + (event.key === 'ArrowDown' ? 1 : -1))
+    }
+    return
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    const index = historySelectedIndex >= 0 ? historySelectedIndex : 0
+    items[index]?.click()
+  }
+})
+
 deepThinkButton?.addEventListener('click', () => togglePressed(deepThinkButton))
 smartSearchButton?.addEventListener('click', () => togglePressed(smartSearchButton))
-sendButton.addEventListener('click', submit)
+historyButton?.addEventListener('click', () => requestHistoryToggle())
+
+// 历史列表滚到接近底部：按需再向页面要一屏（不显示 loading）
+historyList.addEventListener('scroll', () => {
+  if (!historyOpen || !historyHasMore || historyLoadPending) return
+  const remaining = historyList.scrollHeight - historyList.scrollTop - historyList.clientHeight
+  if (remaining > 80) return
+  historyLoadPending = true
+  window.ds?.loadMoreQuickHistory()
+})
+
+// 点弹框外面（包括输入框、消息区、其它按钮）就收起
+app.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!historyOpen) return
+    const target = event.target as Node | null
+    if (target && (historyPanel.contains(target) || historyButton.contains(target))) return
+    applyHistoryPanel(false)
+    window.ds?.toggleQuickHistory(false)
+  },
+  true,
+)
+
+// Markdown 里的链接：一律用系统浏览器打开，不让面板自己导航
+messagesInner.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement | null
+  const link = target?.closest('a')
+  if (!link) return
+  event.preventDefault()
+  const href = link.getAttribute('href') || ''
+  if (href.startsWith('#')) {
+    // Markdown 脚注等站内锚点：在消息区内滚动过去
+    try {
+      const dest = messagesInner.querySelector(href)
+      dest?.scrollIntoView({ block: 'center' })
+    } catch {
+      // 非法选择器忽略
+    }
+    return
+  }
+  if (href) window.ds?.openExternal(href)
+})
+
+// 滚动时更新「滚动到底部」按钮；滚到历史顶部时按需加载更早消息
+messages.addEventListener('scroll', () => {
+  updateScrollButton()
+  if (
+    historyLazyArmed &&
+    historyHasOlder &&
+    !historyOlderLoading &&
+    messages.scrollTop <= 24
+  ) {
+    requestOlderHistory()
+  }
+}, { passive: true })
+
+// 触控板/鼠标向上滑到顶：加载更早的消息
+messages.addEventListener('wheel', (event) => {
+  if (event.deltaY >= 0) return
+  if (messages.scrollTop > OLDER_TRIGGER) return
+  historyLazyArmed = true
+  requestOlderHistory()
+}, { passive: true })
+
+// 拖滚动条/键盘滚动时，先标记用户主动滚动过
+messages.addEventListener('pointerdown', () => {
+  historyLazyArmed = true
+}, { passive: true })
+messages.addEventListener(
+  'scrollend',
+  () => {
+    if (!suppressScrollButton) return
+    suppressScrollButton = false
+    if (suppressScrollTimer) {
+      window.clearTimeout(suppressScrollTimer)
+      suppressScrollTimer = undefined
+    }
+    updateScrollButton()
+  },
+  { passive: true },
+)
+const scrollObserver = new ResizeObserver(updateScrollButton)
+scrollObserver.observe(messages)
+scrollObserver.observe(messagesInner)
+
+scrollBottomButton.addEventListener('click', () => {
+  // 点下去立刻收起，不等滚到底部
+  suppressScrollButtonDuringAnimation()
+  // 只滚到内容底部，不滚进 messagesTail 补出来的空白
+  messages.scrollTo({ top: Math.max(0, contentBottom() - messages.clientHeight), behavior: 'smooth' })
+  focusInput()
+})
+sendButton.addEventListener('click', () => {
+  if (!busy) {
+    submit()
+    return
+  }
+
+  // 生成中：按钮是「停止生成」
+  if (stopping) return
+
+  /*
+   * 乐观更新：点下去立刻切回发送态，不等主进程确认。
+   * 如果停止失败，answer-stopped(stopped:false) 会把按钮恢复成停止态。
+   */
+  stopping = true
+  busy = false
+  syncSendState()
+  window.ds?.stopQuickGeneration()
+})
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     event.preventDefault()
+    if (historyOpen) {
+      applyHistoryPanel(false)
+      window.ds?.toggleQuickHistory(false)
+      return
+    }
     window.ds?.hideQuickWindow()
   }
 })
@@ -409,9 +1407,13 @@ app.addEventListener('mouseleave', scheduleTopbarHide)
 
 tbClose?.addEventListener('click', () => window.ds?.hideQuickWindow())
 tbNewChat?.addEventListener('click', () => {
-  // 收起动画：内容先淡出，等主进程把窗口收回去、发来 mode-changed 再切空态
-  app.classList.add('content-leave')
-  window.setTimeout(() => app.classList.remove('content-leave'), 1500)
+  /*
+   * 动效暂时关闭，直接切回空态。
+   * 恢复动效时取消下面两行注释：
+   *
+   * app.classList.add('content-leave')
+   * window.setTimeout(() => app.classList.remove('content-leave'), 1500)
+   */
   window.ds?.quickNewChat()
 })
 tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
@@ -424,8 +1426,12 @@ tbExpand?.addEventListener('click', () => window.ds?.quickExpand())
  */
 app.addEventListener('pointerdown', (event) => {
   if (event.button !== 0) return
+  // 历史弹框开着时，点哪都只是「关弹框」，不要顺手把窗口拖走
+  if (historyOpen) return
   const target = event.target as HTMLElement | null
-  if (target?.closest('button, textarea, input, select, a, .messages')) return
+  if (target?.closest('button, textarea, input, select, a, .messages, .history-panel')) return
+  // 个别情况下 screenX/Y 会是 NaN，不能拿它当拖动起点
+  if (!Number.isFinite(event.screenX) || !Number.isFinite(event.screenY)) return
 
   dragOrigin = { x: event.screenX, y: event.screenY }
   try {
@@ -440,6 +1446,7 @@ app.addEventListener('pointerdown', (event) => {
 
 app.addEventListener('pointermove', (event) => {
   if (!dragOrigin) return
+  if (!Number.isFinite(event.screenX) || !Number.isFinite(event.screenY)) return
   window.ds?.moveWindowDrag(event.screenX, event.screenY)
 })
 
@@ -463,12 +1470,26 @@ window.ds?.onQuickShown(() => {
   // 顺手重拉一次文案 —— 用户可能刚在设置里换了语言
   void loadMessages()
   app.classList.remove('content-enter')
+  // 设计稿：隐藏后重新唤起，历史弹框默认收起
+  applyHistoryPanel(false)
   autosize()
+  updateScrollButton()
   input.focus()
 })
 
 // 焦点一回到窗口，光标就落在输入框里（从别的 App 切回来、重新唤出都算）
 window.addEventListener('focus', focusInput)
+
+// 窗口尺寸变化（空态展开历史、用户缩放有内容态）后重新贴一下弹框
+window.addEventListener('resize', () => {
+  if (historyOpen) {
+    placeHistoryPanel()
+  } else if (app.dataset.mode === 'empty' && window.innerHeight <= 220) {
+    // 历史弹框已关闭，且窗口已经从撑高状态缩回：现在才撤掉 composer 的固定高度
+    app.classList.remove('history-open')
+  }
+  placeMessagesFade()
+})
 
 /*
  * 点工具栏按钮、复制按钮之后，把光标还给输入框。

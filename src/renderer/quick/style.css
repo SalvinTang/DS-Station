@@ -1,11 +1,13 @@
 /*
- * 快捷窗口。数值全部取自 Design/设计稿001 + Design/ui尺寸.html：
- *   空态外框 400×100，圆角 20，底色 #2C2C2E，1px 描边 #797979
- *   有内容态外框 420 宽，圆角 30，底色 #151517，同款描边
- *   输入框 400×100，圆角 20，底色 #2C2C2E，同款描边
- *   输入文字 16px / 行高 22px，左 14 上 16
+ * 快捷窗口。数值取自 Design/设计稿/快捷窗口UI调整.html + 优化内容展示.html：
+ *   空态外框 400×100，圆角 20；深色 #2C2C2E / 描边 #4E5151，浅色 #FFFFFF / 描边 #797979
+ *   有内容态外框 420 宽，圆角 30，底色 #151517，描边 #797979
+ *   输入框内容：左 13 / 上 16，文字 16px / 行高 22px，占位符 #999999
+ *   功能按钮：高 26 的胶囊，图标 14，文字 12px
+ *   发送按钮：30×30 圆形，图标 12，可点 #3964FE / 悬停 #5686FE
  *   顶栏 高 40，圆角 29（与外框内缘对齐），底色 #232328，移出 1 秒消失
  *   用户气泡 #133463，圆角 10，最大宽度 75%
+ *   滚动到底部按钮 30×30，浮在输入框上方 11px，水平居中
  */
 
 :root {
@@ -14,23 +16,57 @@
   /* 浅色样式 */
   --frame-empty: #ffffff;
   --frame-content: #ffffff;
-  --frame-border: #c9c9cf;
-  --composer-bg: #f3f3f5;
-  --composer-border: #c9c9cf;
+  --frame-border: #e4e5e9;
+  --empty-border: #dcdee3;
+  --composer-bg: #ffffff;
+  --composer-border: #e4e5e9;
 
   --text: #1b1b1f;
-  --placeholder: #717582;
-  --icon: #0f1114;
-  --icon-active: #5686fe;
+  --placeholder: #999999;
 
-  --send-bg: #5686fe;
-  --send-hover: #3d69fe;
+  /* 功能按钮（深度 / 搜索）：未激活 / 已激活 */
+  --tool-bg: #ffffff;
+  --tool-border: #e6e6e6;
+  --tool-fg: #151721;
+  --tool-icon: #0f1114;
+  --tool-bg-active: #e8f0fe;
+  --tool-border-active: #b7c8fe;
+  --tool-fg-active: #3964fe;
+  --tool-icon-active: #5686fe;
+
+  --send-bg: #3964fe;
+  --send-hover: #5686fe;
   --send-disabled: #b0c1ff;
   --send-fg: #ffffff;
-  --send-disabled-fg: #717582;
+  --send-disabled-fg: #ffffff;
 
-  --user-bubble: #133463;
-  --user-bubble-fg: #ffffff;
+  /* 滚动到底部按钮 */
+  --scroll-bg: #ffffff;
+  --scroll-border: #e6e6e6;
+  --scroll-fg: #151721;
+
+  /* 历史对话弹框 */
+  --history-bg: #ffffff;
+  --history-border: #e6e6e6;
+
+  /* 亮色：用户气泡浅蓝、深色文字 */
+  --user-bubble: #edf3fe;
+  --user-bubble-fg: #1b1b1f;
+
+  /* Markdown */
+  --link: #2f6bff;
+  --code-bg: #f9fafb;
+  --code-fg: #1b1b1f;
+  --code-head-bg: #f1f2f4;
+  --code-head-fg: #6b7280;
+  --code-lang-fg: #3c4043;
+  --inline-code-bg: #f1f3f5;
+  --table-border: #e2e4e8;
+  --table-head-bg: #f6f7f9;
+  --quote-border: #d9dce1;
+  --quote-fg: #55595f;
+  --cite-bg: #f1f2f4;
+  --cite-fg: #6b6f76;
 
   --topbar-bg: #e9e9eb;
   --topbar-fg: #555555;
@@ -38,6 +74,11 @@
   --copy-fg: #555555;
   --hover-bg: rgba(0, 0, 0, 0.06);
   --scrollbar: rgba(0, 0, 0, 0.28);
+  /* macOS 风格：近距离薄投影 + 远距离柔和扩散 */
+  --shadow-popover:
+    0 0 0 0.5px rgba(0, 0, 0, 0.04),
+    0 2px 8px rgba(0, 0, 0, 0.05),
+    0 10px 30px rgba(0, 0, 0, 0.1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,15 +86,48 @@
     --frame-empty: #2c2c2e;
     --frame-content: #151517;
     --frame-border: #797979;
+    --empty-border: #4e5151;
     --composer-bg: #2c2c2e;
     --composer-border: #797979;
 
     --text: #ffffff;
-    --placeholder: #717582;
-    --icon: #ffffff;
-    --icon-active: #5686fe;
+    --placeholder: #999999;
+
+    --tool-bg: #2c2c2e;
+    --tool-border: #797979;
+    --tool-fg: #ffffff;
+    --tool-icon: #ffffff;
+    --tool-bg-active: #34415b;
+    --tool-border-active: #4868b2;
+    --tool-fg-active: #679efe;
+    --tool-icon-active: #517eea;
 
     --send-disabled: #3c5082;
+    --send-disabled-fg: #717582;
+
+    --scroll-bg: #2c2c2e;
+    --scroll-border: #797979;
+    --scroll-fg: #ffffff;
+
+    --history-bg: #1b1b1f;
+    --history-border: #3a3a3d;
+
+    --user-bubble: #133463;
+    --user-bubble-fg: #ffffff;
+
+    --link: #7aa2ff;
+    --code-bg: #1e1f22;
+    --code-fg: #f9fafb;
+    --code-head-bg: #2c2c2e;
+    --code-head-fg: #cfd3d6;
+    --code-lang-fg: #f9fafb;
+    --inline-code-bg: #2a2b30;
+    --table-border: rgba(255, 255, 255, 0.14);
+    --table-head-bg: rgba(255, 255, 255, 0.05);
+    --quote-border: rgba(255, 255, 255, 0.18);
+    --quote-fg: #b9bcc4;
+    --cite-bg: #2c2c2e;
+    --cite-fg: #adb2b8;
 
     --topbar-bg: #232328;
     --topbar-fg: #ababab;
@@ -61,6 +135,10 @@
     --copy-fg: #ffffff;
     --hover-bg: rgba(255, 255, 255, 0.08);
     --scrollbar: rgba(255, 255, 255, 0.28);
+    --shadow-popover:
+      0 0 0 0.5px rgba(255, 255, 255, 0.06),
+      0 2px 8px rgba(0, 0, 0, 0.3),
+      0 12px 34px rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -79,7 +157,8 @@ body {
 }
 
 body {
-  font-family: -apple-system, 'SF Pro Text', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  /* 项目统一用系统字体：苹方（PingFang SC） */
+  font-family: 'PingFang SC', -apple-system, 'Helvetica Neue', sans-serif;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
 }
@@ -102,8 +181,14 @@ body {
   transition: background-color 0.26s ease, border-radius 0.26s ease;
 }
 
+/*
+ * 空态：窗口本身透明，输入框自己画成 400×100 的圆角面板。
+ * 这样打开历史弹框、窗口临时向上撑高时，上半部分天然透明，
+ * 不需要再切换底色（也避免后台窗口里 CSS 过渡被节流、卡在中间状态）。
+ */
 .app[data-mode='empty'] {
-  background: var(--frame-empty);
+  background: transparent;
+  border: 0;
   border-radius: 20px;
 }
 
@@ -183,11 +268,39 @@ body {
   overscroll-behavior: contain;
   /* 展开动画期间先藏起来，动画结束再淡入 */
   transition: opacity 0.22s ease;
-  /* 外框 1px 描边之内再留 9px，视觉上距窗口边缘 10px */
-  padding: 9px 9px 0;
+  /* 左右距窗口边缘 18px；顶部仍是 9px，保证正文从顶栏下方 10px 开始 */
+  padding: 9px 17px 0;
 }
 
 .app[data-mode='empty'] .messages {
+  display: none;
+}
+
+/* 输入框上方的 10px 渐变蒙层，让滚到这里的对话逐渐消失 */
+.messages-fade {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  /* JS 会按输入框实际顶部更新；这里给个兜底 */
+  bottom: 110px;
+  height: 10px;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--frame-content) 80%,
+    var(--frame-content) 100%
+  );
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.app[data-mode='content'] .messages-fade {
+  opacity: 1;
+}
+
+.app[data-mode='empty'] .messages-fade {
   display: none;
 }
 
@@ -195,16 +308,46 @@ body {
   display: flex;
   flex-direction: column;
   /*
-   * 顶栏高 40，再留 25px —— 设计稿里第一条内容距外框顶 65px。
-   * 顶栏收起时内容仍然从 65px 开始，不会上下跳。
+   * 第一条内容距窗口顶 = 外框 1 + 消息区 9 + 40 = 50：
+   * 正好是「顶栏 40 高 + 下面 10px」。
+   * 新消息也顶到这条线上（main.ts 里的 TOPBAR_HEIGHT + MESSAGE_TOP_GAP）。
    */
-  padding-top: 55px;
+  padding-top: 41px;
   padding-bottom: 10px;
+}
+
+/* 只用来给「新消息顶到最上面」补滚动余量，高度由 main.ts 计算，回答结束归零 */
+.messages-tail {
+  height: 0;
 }
 
 .msg-group {
   display: flex;
   flex-direction: column;
+}
+
+/*
+ * 每组对话的上下边距（组的上/下边由组内最上/最下的控件决定）：
+ *   用户提问：上 10、下 10
+ *   AI 回答：上 6、下 30
+ * 列表第一条不再加上边距 —— 消息区顶部本来就有 10px 空隙，
+ * 再加一次会让首条内容掉到 60px。
+ */
+.msg-group-user {
+  margin: 10px 0;
+}
+
+.msg-group-ai {
+  margin: 6px 0 30px;
+}
+
+/* 等待回答的呼吸点占的是 AI 回答组的位置 */
+.msg-group-thinking {
+  margin-top: 6px;
+}
+
+.messages-inner > .msg-group:first-child {
+  margin-top: 0;
 }
 
 .msg-user {
@@ -235,11 +378,457 @@ body {
   user-select: text;
 }
 
-/* 设计稿：内容下方 10px 是复制按钮，按钮下方再留 30px 到下一组 */
+/* ── Markdown（DeepSeek 页面渲染好的 HTML，白名单清洗后）────── */
+
+.msg-ai .body.md {
+  white-space: normal;
+}
+
+.msg-ai .body.md > :first-child {
+  margin-top: 0;
+}
+
+/*
+ * 组的上下边贴着真正的内容控件：去掉末尾块级元素的多余外边距。
+ * 提高一级选择器权重，压过下面 .md .md-code-block / .md-table-wrap /
+ * .md-math-display 自己的 margin。
+ */
+.msg-ai .body.md > :last-child {
+  margin-bottom: 0;
+}
+
+.md p {
+  margin: 0 0 10px;
+}
+
+.md h1,
+.md h2,
+.md h3,
+.md h4,
+.md h5,
+.md h6 {
+  margin: 18px 0 8px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.md h1 {
+  font-size: 20px;
+}
+.md h2 {
+  font-size: 18px;
+}
+.md h3 {
+  font-size: 17px;
+}
+.md h4 {
+  font-size: 16px;
+}
+.md h5,
+.md h6 {
+  font-size: 15px;
+}
+
+.md ul,
+.md ol {
+  margin: 0 0 10px;
+  padding-left: 22px;
+}
+
+.md li {
+  margin: 2px 0;
+}
+
+.md li > p {
+  margin: 0 0 4px;
+}
+
+.md li > p:last-child {
+  margin-bottom: 0;
+}
+
+.md blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--quote-border);
+  color: var(--quote-fg);
+}
+
+.md blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.md hr {
+  margin: 14px 0;
+  border: 0;
+  border-top: 1px solid var(--table-border);
+}
+
+.md a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.md code {
+  font-family: Menlo, Monaco, Consolas, 'Cascadia Mono', 'Courier New', monospace;
+  font-size: 13px;
+}
+
+.md :not(pre) > code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--inline-code-bg);
+}
+
+.md pre {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  overflow-x: auto;
+  font-family: Menlo, Monaco, Consolas, 'Cascadia Mono', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.md pre code {
+  padding: 0;
+  background: transparent;
+  font-size: inherit;
+}
+
+/* 代码块：顶部语言标签 + 右侧图标复制按钮 */
+.md .md-code-block {
+  margin: 0 0 12px;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--code-bg);
+}
+
+.md .md-code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 12px;
+  background: var(--code-head-bg);
+  color: var(--code-head-fg);
+}
+
+.md .md-code-lang {
+  font-size: 12px;
+  color: var(--code-lang-fg);
+}
+
+.md .md-code-copy {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--code-head-fg);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.md .md-code-copy:hover {
+  background: var(--hover-bg);
+}
+
+.md .md-code-copy.copied {
+  color: var(--link);
+}
+
+.md .md-code-block pre {
+  margin: 0;
+  padding: 16px;
+  border-radius: 0;
+  background: transparent;
+}
+
+.md .md-table-wrap {
+  margin: 0 0 12px;
+  overflow-x: auto;
+}
+
+.md table {
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.md th,
+.md td {
+  padding: 6px 10px;
+  border: 1px solid var(--table-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md th {
+  background: var(--table-head-bg);
+  font-weight: 600;
+}
+
+.md .md-math-inline {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.md .md-math-display {
+  display: block;
+  margin: 10px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.md math {
+  font-size: 1.05em;
+}
+
+/* 引用角标：数字胶囊 / 来源图标 + 名称 */
+.md .md-cite {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  padding: 0 4px;
+  border-radius: 6px 6px 6px 0;
+  background: var(--cite-bg);
+  color: var(--cite-fg);
+  font-size: 9px;
+  line-height: 14px;
+  vertical-align: 2px;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.md .md-cite-brand {
+  padding: 0 5px 0 2px;
+  gap: 3px;
+}
+
+.md .md-cite-icon {
+  display: block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  object-fit: contain;
+}
+
+/* Markdown 任务列表 / 脚注 / 图片占位 */
+.md .task-list-item {
+  list-style: none;
+}
+
+.md .task-list-item-checkbox {
+  margin: 0 6px 0 -18px;
+  vertical-align: middle;
+  accent-color: var(--link);
+}
+
+.md .contains-task-list {
+  padding-left: 20px;
+}
+
+.md .footnotes {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--table-border);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--quote-fg);
+}
+
+.md .footnotes ol {
+  padding-left: 18px;
+}
+
+.md .footnotes li {
+  margin: 4px 0;
+}
+
+.md .footnote-ref a,
+.md .footnote-backref {
+  color: var(--link);
+  text-decoration: none;
+}
+
+.md .md-image-alt {
+  display: inline-block;
+  padding: 2px 6px;
+  border: 1px dashed var(--table-border);
+  border-radius: 4px;
+  color: var(--quote-fg);
+  font-size: 13px;
+}
+
+/* highlight.js 代码高亮 — 亮色 */
+.md .hljs-comment,
+.md .hljs-quote {
+  color: #6a737d;
+}
+.md .hljs-keyword,
+.md .hljs-selector-tag,
+.md .hljs-literal,
+.md .hljs-doctag {
+  color: #d73a49;
+}
+.md .hljs-string,
+.md .hljs-template-tag,
+.md .hljs-template-variable {
+  color: #032f62;
+}
+.md .hljs-number,
+.md .hljs-built_in,
+.md .hljs-symbol,
+.md .hljs-bullet {
+  color: #005cc5;
+}
+.md .hljs-title,
+.md .hljs-section {
+  color: #6f42c1;
+}
+.md .hljs-type,
+.md .hljs-name,
+.md .hljs-class .hljs-title {
+  color: #22863a;
+}
+.md .hljs-attr,
+.md .hljs-attribute {
+  color: #005cc5;
+}
+.md .hljs-variable,
+.md .hljs-params {
+  color: #24292e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .md .hljs-comment,
+  .md .hljs-quote {
+    color: #8b949e;
+  }
+  .md .hljs-keyword,
+  .md .hljs-selector-tag,
+  .md .hljs-literal,
+  .md .hljs-doctag {
+    color: #ff7b72;
+  }
+  .md .hljs-string,
+  .md .hljs-template-tag,
+  .md .hljs-template-variable {
+    color: #a5d6ff;
+  }
+  .md .hljs-number,
+  .md .hljs-built_in,
+  .md .hljs-symbol,
+  .md .hljs-bullet {
+    color: #79c0ff;
+  }
+  .md .hljs-title,
+  .md .hljs-section {
+    color: #d2a8ff;
+  }
+  .md .hljs-type,
+  .md .hljs-name,
+  .md .hljs-class .hljs-title {
+    color: #7ee787;
+  }
+  .md .hljs-attr,
+  .md .hljs-attribute {
+    color: #79c0ff;
+  }
+  .md .hljs-variable,
+  .md .hljs-params {
+    color: #c9d1d9;
+  }
+}
+
+/* 代码高亮（Prism token）— 亮色 */
+.md .token.comment,
+.md .token.prolog,
+.md .token.doctype,
+.md .token.cdata {
+  color: #6a737d;
+}
+.md .token.keyword,
+.md .token.operator {
+  color: #d73a49;
+}
+.md .token.string,
+.md .token.attr-value,
+.md .token.char {
+  color: #032f62;
+}
+.md .token.number,
+.md .token.boolean,
+.md .token.builtin,
+.md .token.property,
+.md .token.constant,
+.md .token.symbol {
+  color: #005cc5;
+}
+.md .token.function,
+.md .token.class-name {
+  color: #6f42c1;
+}
+.md .token.punctuation {
+  color: #24292e;
+}
+
+@media (prefers-color-scheme: dark) {
+  .md .token.comment,
+  .md .token.prolog,
+  .md .token.doctype,
+  .md .token.cdata {
+    color: #8b949e;
+  }
+  .md .token.keyword,
+  .md .token.operator {
+    color: #ff7b72;
+  }
+  .md .token.string,
+  .md .token.attr-value,
+  .md .token.char {
+    color: #a5d6ff;
+  }
+  .md .token.number,
+  .md .token.boolean,
+  .md .token.builtin,
+  .md .token.property,
+  .md .token.constant,
+  .md .token.symbol {
+    color: #79c0ff;
+  }
+  .md .token.function,
+  .md .token.class-name {
+    color: #d2a8ff;
+  }
+  .md .token.punctuation {
+    color: #c9d1d9;
+  }
+}
+
+/*
+ * 复制按钮离内容 6px。
+ * 按钮本身 20px，16px 图标居中，上下各有 2px 内缩，
+ * 所以外边距写 4px，视觉上图标离内容正好 6px。
+ * 组的下边距由 .msg-group-user / .msg-group-ai 负责。
+ */
 .msg-actions {
   display: flex;
-  margin-top: 10px;
-  margin-bottom: 30px;
+  margin-top: 4px;
+  margin-bottom: 0;
 }
 
 .msg-actions.right {
@@ -248,8 +837,54 @@ body {
   margin-right: -2px;
 }
 
+/*
+ * 用户提问下的操作按钮默认隐藏，鼠标进入这个用户提问组时才显示。
+ * 用 opacity 而不是 display/visibility，隐藏时仍占位，上下间距不会跳。
+ * 键盘 Tab 到复制按钮时（focus-within）也显示。
+ */
+.msg-group-user .msg-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease;
+}
+
+.msg-group-user:hover .msg-actions,
+.msg-group-user:focus-within .msg-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .msg-actions:not(.right) {
   margin-left: -2px;
+}
+
+/* 「继续生成」和复制按钮在同一行：复制在左，继续在右 */
+.msg-actions.has-continue {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.continue-btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--composer-border);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.continue-btn:hover {
+  background: var(--hover-bg);
+}
+
+.continue-btn:focus-visible {
+  outline: 2px solid var(--send-bg);
+  outline-offset: 1px;
 }
 
 .copy-btn {
@@ -308,21 +943,24 @@ body {
 /* ── 输入区 ─────────────────────────────────────────────── */
 
 /*
- * 内边距按设计稿反推：外框 1px 描边 + 这些值 = 上 16 / 左 14 / 右 11 / 下 10。
- * 输入框内文字 28 高、工具栏 36 高。
+ * 内边距按设计稿反推：外框 1px 描边 + 这些值 = 上 16 / 左 13 / 右 11 / 下 8。
+ * 输入框文字 28 高、工具栏 36 高；底部一行胶囊 26、发送按钮 30，正好落在设计位置。
  */
 .composer {
+  position: relative;
   display: flex;
   flex-direction: column;
-  padding: 15px 10px 9px 13px;
+  padding: 15px 10px 7px 12px;
   /* 展开动画期间先藏起来，动画结束再淡入 */
   transition: opacity 0.22s ease;
 }
 
-/* 空态：整个窗口就是输入框，描边和圆角由 .app 负责 */
+/* 空态：整个窗口就是输入框，描边和圆角由输入框自己画 */
 .app[data-mode='empty'] .composer {
   flex: 1;
-  background: transparent;
+  border: 1px solid var(--empty-border);
+  border-radius: 20px;
+  background: var(--frame-empty);
 }
 
 /* 有内容态：输入框是浮在外框里的圆角块，四周各留 10px */
@@ -335,17 +973,235 @@ body {
   background: var(--composer-bg);
 }
 
-/* 展开动画进行中：只显示外框，内容等动画结束再淡入 */
+/*
+ * 空态打开历史弹框：窗口临时向上让出空间。
+ * 此时外框整体透明，输入框自己画成一块 400×100 的圆角面板，
+ * 历史弹框浮在它上方 —— 和设计稿「输入框 + 上方弹框」的效果一致。
+ */
+.app[data-mode='empty'].history-open .composer {
+  flex: none;
+  height: 100px;
+  margin-top: auto;
+}
+
+/* 历史消息按需加载时，顶部居中的三点等待 */
+.history-loader {
+  position: absolute;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  height: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.history-loader[hidden] {
+  display: none;
+}
+
+/* 缝隙只有 10px：这里去掉上下浮动，只做透明度呼吸，保证三个点始终居中 */
+.history-loader .thinking i {
+  animation-name: ds-breathe-loader;
+}
+
+@keyframes ds-breathe-loader {
+  0%,
+  70%,
+  100% {
+    opacity: 0.28;
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+/* ── 历史对话弹框 ─────────────────────────────────────────── */
+
+.history-panel {
+  position: absolute;
+  left: 10px;
+  /* 具体位置由 main.ts 根据「历史」按钮计算，这里给个兜底 */
+  bottom: 53px;
+  z-index: 9;
+
+  width: 206px;
+  max-height: 166px;
+  display: flex;
+  flex-direction: column;
+
+  border: 1px solid var(--history-border);
+  border-radius: 10px;
+  background: var(--history-bg);
+  box-shadow: var(--shadow-popover);
+
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+/*
+ * 指向「历史」胶囊的小尾巴。
+ * 用两个纯三角形拼出 1px 描边：外层是描边色，内层是气泡底色。
+ * 底边与气泡底边齐平，不会伸进内容区遮挡文字。
+ */
+.history-panel::before,
+.history-panel::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-color: transparent;
+  pointer-events: none;
+}
+
+.history-panel::before {
+  left: calc(var(--tail-x, 96px) - 1px);
+  border-width: 13px 8px 0 8px;
+  border-top-color: var(--history-border);
+}
+
+.history-panel::after {
+  left: var(--tail-x, 96px);
+  border-width: 12px 7px 0 7px;
+  border-top-color: var(--history-bg);
+}
+
+.history-panel[hidden] {
+  display: none;
+}
+
+.history-panel.open {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+.history-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 9px;
+}
+
+/* 等数据回来之前先撑住高度，避免弹框先缩成一条再长开 */
+.history-panel.loading .history-list {
+  min-height: 120px;
+}
+
+.history-item {
+  display: block;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 30px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  background: var(--hover-bg);
+}
+
+.history-item.selected {
+  background: var(--user-bubble);
+  color: var(--user-bubble-fg);
+}
+
+.history-empty {
+  display: none;
+  padding: 24px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--placeholder);
+}
+
+.history-panel.empty .history-list {
+  display: none;
+}
+
+.history-panel.empty .history-empty {
+  display: block;
+}
+
+/*
+ * 展开/收起动画进行中：
+ * - 消息先藏起来，动画结束再淡入
+ * - 输入框始终可见，固定 400×100 贴在窗口底部；
+ *   外框多出来的 10px 由窗口变宽自然让出来
+ */
 .app.content-enter .messages,
-.app.content-enter .composer {
+.app.content-leave .messages,
+.app.content-leave .topbar {
   opacity: 0;
 }
 
-/* 收起动画进行中：内容先淡出，窗口随后收回空态 */
-.app.content-leave .messages,
-.app.content-leave .composer,
-.app.content-leave .topbar {
+.app.content-enter,
+.app.content-leave {
+  /* 动画期间外框直接实色，不做背景/圆角渐变，避免内框看起来发虚 */
+  transition: none;
+}
+
+.app.content-enter .composer,
+.app.content-leave .composer {
+  position: absolute;
+  left: 50%;
+  bottom: max(0px, calc((100vw - 400px) / 2 - 1px));
+  width: 400px;
+  height: 100px;
+  min-height: 100px;
+  margin: 0;
+  transform: translateX(-50%);
+  opacity: 1;
+  /* 内框全程实色，不参与任何淡入淡出 */
+  transition: none;
+}
+
+/*
+ * 「滚动到底部」浮在输入框正上方 11px、水平居中。
+ * 挂在 .composer 里，输入框长高时它会跟着一起上移（设计稿 1.3）。
+ */
+.scroll-btn {
+  position: absolute;
+  left: 50%;
+  top: -41px;
+  transform: translateX(-50%);
+  z-index: 5;
+
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--scroll-border);
+  border-radius: 50%;
+  background: var(--scroll-bg);
+  color: var(--scroll-fg);
+  cursor: pointer;
+
   opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.scroll-btn.show {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.app[data-mode='empty'] .scroll-btn {
+  display: none;
 }
 
 .input {
@@ -388,31 +1244,51 @@ body {
   flex: 1;
 }
 
+/* 设计稿：高 26 的胶囊，图标 14、文字 12px，内缩 7 / 9 */
 .tool-btn {
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--icon);
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px 0 7px;
+  border: 1px solid var(--tool-border);
+  border-radius: 13px;
+  background: var(--tool-bg);
+  color: var(--tool-fg);
+  font: inherit;
   cursor: pointer;
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.tool-btn svg {
+  flex: none;
+  color: var(--tool-icon);
+  transition: color 0.14s ease;
+}
+
+.tool-label {
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .tool-btn:hover {
   background: var(--hover-bg);
 }
 
-/* 设计稿：浅色是关闭状态，蓝色是开启状态 */
+/* 设计稿：白色是关闭状态，蓝色是开启状态 */
 .tool-btn[aria-pressed='true'] {
-  color: var(--icon-active);
+  background: var(--tool-bg-active);
+  border-color: var(--tool-border-active);
+  color: var(--tool-fg-active);
+}
+
+.tool-btn[aria-pressed='true'] svg {
+  color: var(--tool-icon-active);
 }
 
 .send-btn {
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
   display: grid;
   place-items: center;
   border: 0;
@@ -437,27 +1313,20 @@ body {
 .tool-btn:focus-visible,
 .send-btn:focus-visible,
 .tb-btn:focus-visible,
-.copy-btn:focus-visible {
+.copy-btn:focus-visible,
+.scroll-btn:focus-visible {
   outline: 2px solid var(--send-bg);
   outline-offset: 1px;
 }
 
-/* ── 滚动条：macOS overlay 风格 ─────────────────────────── */
+/*
+ * 滚动条不自己画。
+ *
+ * 自定义 ::-webkit-scrollbar 会退化成经典滚动条：
+ *   - 一直占 8px 宽度，导致消息左右边距不对称
+ *   - 无法完全跟随 macOS 的「滚动时显示 / 悬停显示」行为
+ *
+ * 交还给 Chromium/macOS 的原生 overlay 滚动条：
+ * 不占内容宽度，默认自动隐藏，滚动或悬停时出现。
+ */
 
-.messages::-webkit-scrollbar,
-.input::-webkit-scrollbar {
-  width: 8px;
-}
-
-.messages::-webkit-scrollbar-thumb,
-.input::-webkit-scrollbar-thumb {
-  background: var(--scrollbar);
-  border-radius: 4px;
-  border: 2px solid transparent;
-  background-clip: content-box;
-}
-
-.messages::-webkit-scrollbar-track,
-.input::-webkit-scrollbar-track {
-  background: transparent;
-}

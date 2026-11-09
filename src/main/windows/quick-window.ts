@@ -23,14 +23,36 @@ import type { QuickEvent, QuickMode } from '../../shared/types'
 /** 有内容态距屏幕边缘的安全距离 */
 const EDGE_MARGIN = 20
 
-/** 展开动画：先下移，再向上长高 */
-const EXPAND_SHIFT = 24
-const PHASE_MOVE_MS = 140
-const PHASE_GROW_MS = 280
+/**
+ * 空态 ↔ 有内容态的展开/收起动画：
+ * - 分两步，每步 180ms，总共 360ms
+ * - 第一步把四周 10px 的外框撑出来，第二步向上展开
+ * - 窗口底边最终比空态低一个发送按钮的高度（30px，包含底部 10px 间距）
+ */
+const TRANSITION_TOTAL_MS = 360
+const TRANSITION_WINDOW_DOWN = 30
+const TRANSITION_FRAME_GAP = 10
 const FRAME_MS = 16
+
+/**
+ * 动效总开关。
+ * 暂时关闭，空态 ↔ 有内容态直接切到最终位置；动画实现保留在下面，
+ * 参数记录见 docs/快捷窗口动效参数.md，后续优化时改回 true 即可。
+ */
+const ENABLE_TRANSITION_ANIMATION = false
 
 /** 用户手动缩放后，隔一小会儿再落盘 */
 const SIZE_SAVE_DELAY = 400
+
+/** 空态打开历史弹框时，窗口向上让出的高度（输入框 100 + 气泡主体 166 + 尾巴和间隙） */
+const HISTORY_WINDOW_HEIGHT = 230
+
+/**
+ * 关掉历史弹框后，窗口保持撑高状态一小会儿再还原。
+ * 连续点「历史」时，第二次打开会落在这个窗口期内，不再反复
+ * 缩放窗口 / 开关系统阴影 —— 浅色背景下那圈灰边就是闪烁的来源。
+ */
+const HISTORY_CLOSE_GRACE_MS = 600
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -40,9 +62,9 @@ function lerp(from: number, to: number, t: number): number {
   return from + (to - from) * t
 }
 
-/** 缓出，动画收尾更柔和 */
-function easeOut(t: number): number {
-  return 1 - Math.pow(1 - t, 3)
+/** 和动效稿一致：swing / ease-in-out */
+function easeSwing(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
 export class QuickWindow {
@@ -57,6 +79,11 @@ export class QuickWindow {
   private currentHeight = QUICK_WINDOW_MIN_HEIGHT
   private visible = false
   private mode: QuickMode = 'empty'
+  /** 空态打开了历史弹框：窗口临时向上让出空间 */
+  private historyOpen = false
+  private historyRestoreHeight = QUICK_WINDOW_MIN_HEIGHT
+  /** 关闭弹框后延迟还原窗口的定时器 */
+  private historyCloseTimer: NodeJS.Timeout | null = null
 
   /** 有内容态的尺寸，跨隐藏/重启保留 */
   private contentSize = {
@@ -184,29 +211,44 @@ export class QuickWindow {
     /*
      * 多桌面 / 全屏：
      * 窗口始终「在所有空间可见」，并且允许盖在全屏应用之上。
-     * 这样：① 任意桌面按快捷键，第一次就在当前桌面出现；
-     *      ② 用户切桌面时已经打开的面板会跟着走，不会留在原桌面；
+     * 这样：① 任意桌面按快捷键，面板就在当前桌面出现；
+     *      ② 用户切桌面时面板会跟着走；
      *      ③ 全屏应用里唤出也能浮在它前面。
-     * ★ 不要在这里把窗口收回某一空间 —— 那会让上面三种情况全部退化
-     *   （第一次按不出来、要按两次；全屏应用里被挡在后面）。
+     *
+     * ★ 空间被销毁后（某个全屏应用退出全屏），macOS 会把窗口的
+     *   canJoinAllSpaces 弄丢，而且这个归属「只在窗口可见时」才改得动。
+     *   所以顺序是：
+     *     1. 显示前先声明一次；
+     *     2. showInactive() 不激活地显示，避免激活时把用户切回普通桌面；
+     *     3. 窗口可见后再 false → true 刷新一次归属（关键的一步）；
+     *     4. 最后 focus() —— 此时窗口已经在当前空间里，激活不会再切桌面。
      */
+    app.setActivationPolicy('accessory')
+
+    this.window.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true })
     this.window.setVisibleOnAllWorkspaces(true, {
       visibleOnFullScreen: true,
       skipTransformProcessType: true,
     })
-
-    /*
-     * ★ 不要调用 app.show()。
-     *   它会把整个 App 恢复到上次所在的桌面 —— 在全屏应用里唤出时，
-     *   用户会先被切到那个桌面，再看到面板。window.show() 自己会激活。
-     *   前提是 index.ts 里把激活策略设成了 accessory（见那里的注释）。
-     */
-
-    // 先把层级定好再显示，窗口一出现就在全屏应用之上
     this.window.setAlwaysOnTop(true, 'screen-saver')
-    this.window.show()
+
+    this.window.showInactive()
     this.window.moveTop()
     this.visible = true
+
+    setTimeout(() => {
+      if (this.window.isDestroyed() || !this.visible) return
+      this.window.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true })
+      setTimeout(() => {
+        if (this.window.isDestroyed() || !this.visible) return
+        this.window.setVisibleOnAllWorkspaces(true, {
+          visibleOnFullScreen: true,
+          skipTransformProcessType: true,
+        })
+        this.window.moveTop()
+        this.window.focus()
+      }, 80)
+    }, 120)
 
     // 全屏自检：确认面板拿到了键盘焦点（DS_FS_TEST=1）
     if (process.env.DS_FS_TEST === '1') {
@@ -224,7 +266,7 @@ export class QuickWindow {
               }),
             ),
           )
-      }, 300)
+      }, 400)
     }
 
     const { x, y, width, height } = this.window.getBounds()
@@ -253,6 +295,13 @@ export class QuickWindow {
       this.sendEvent({ type: 'transition-done' })
     }
 
+    // 历史弹框开着（或还在收起缓冲期）时被收起：直接把窗口还原，否则下次唤出还是高的
+    if (this.historyOpen) {
+      this.cancelHistoryCollapse()
+      this.collapseHistoryWindow()
+      this.sendEvent({ type: 'history-panel', open: false })
+    }
+
     // 位置可能已经变了，下次展开重新记录反向动画的落点
     this.preExpandBottom = null
 
@@ -274,7 +323,8 @@ export class QuickWindow {
 
   /** 空态下输入折行时向上长高，夹在 100–200 之间 */
   applyHeight(height: number): void {
-    if (this.mode !== 'empty') return
+    // 历史弹框开着的时候窗口是临时撑高的，别让输入框的自动高度把它收回去
+    if (this.mode !== 'empty' || this.historyOpen) return
 
     const next = clamp(Math.round(height), QUICK_WINDOW_MIN_HEIGHT, QUICK_WINDOW_MAX_HEIGHT)
     if (next === this.currentHeight) return
@@ -288,9 +338,87 @@ export class QuickWindow {
     })
   }
 
+  /**
+   * 打开 / 收起历史弹框。
+   *
+   * 空态只有 400×100，放不下列表，所以窗口临时向上让出空间（底边不动）。
+   * 有内容态本来就是 420×500，直接浮在消息区上，不动窗口。
+   */
+  openHistoryPanel(): void {
+    // 在收起缓冲期内重新打开：窗口还是撑高状态，直接复用，不重新缩放/开关阴影
+    this.cancelHistoryCollapse()
+
+    if (this.mode === 'empty' && !this.historyOpen) {
+      this.historyOpen = true
+      this.historyRestoreHeight = this.currentHeight
+
+      const bounds = this.window.getBounds()
+      const bottom = bounds.y + bounds.height
+      const area = screen.getDisplayNearestPoint({
+        x: Math.round(bounds.x + bounds.width / 2),
+        y: Math.round(bounds.y + bounds.height / 2),
+      }).workArea
+      const maxHeight = bottom - area.y - EDGE_MARGIN
+      const height = clamp(HISTORY_WINDOW_HEIGHT, QUICK_WINDOW_MIN_HEIGHT + 10, Math.max(QUICK_WINDOW_MIN_HEIGHT, maxHeight))
+
+      // 关掉系统窗口阴影：撑高后窗口是一块很大的透明矩形，
+      // 系统阴影会在弹框外侧留下一圈灰边（透明区域也有阴影轮廓）。
+      this.window.setHasShadow(false)
+
+      this.window.setBounds({
+        x: bounds.x,
+        y: bottom - height,
+        width: bounds.width,
+        height,
+      })
+    }
+    this.sendEvent({ type: 'history-panel', open: true })
+  }
+
+  closeHistoryPanel(): void {
+    if (this.historyOpen && this.mode === 'empty') {
+      /*
+       * 只先关界面，窗口延迟一小会儿再缩回去。
+       * 连续点「历史」时，第二次打开会取消这个定时器，
+       * 窗口不用反复从 230 缩回 100、再涨回 230，也不会反复开关系统阴影。
+       */
+      this.cancelHistoryCollapse()
+      this.historyCloseTimer = setTimeout(() => {
+        this.historyCloseTimer = null
+        this.collapseHistoryWindow()
+      }, HISTORY_CLOSE_GRACE_MS)
+    }
+    this.sendEvent({ type: 'history-panel', open: false })
+  }
+
+  /** 把撑高的空态窗口缩回原高度（先缩放，再恢复系统阴影） */
+  private collapseHistoryWindow(): void {
+    if (!this.historyOpen) return
+    this.historyOpen = false
+
+    const bounds = this.window.getBounds()
+    this.window.setBounds({
+      x: bounds.x,
+      y: bounds.y + bounds.height - this.historyRestoreHeight,
+      width: QUICK_WINDOW_WIDTH,
+      height: this.historyRestoreHeight,
+    })
+    // 顺序很重要：在撑高的透明窗口上打开阴影，会先闪一圈灰色轮廓
+    this.window.setHasShadow(true)
+  }
+
+  private cancelHistoryCollapse(): void {
+    if (!this.historyCloseTimer) return
+    clearTimeout(this.historyCloseTimer)
+    this.historyCloseTimer = null
+  }
+
   // ── 手动拖动窗口 ──────────────────────────────────────────
 
   beginDrag(mouseX: number, mouseY: number): void {
+    // 某些情况下 Chromium 给出的 screenX/Y 可能是 NaN，不能拿它当拖动原点
+    if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) return
+
     const bounds = this.window.getBounds()
     this.dragOrigin = { mouseX, mouseY, x: bounds.x, y: bounds.y }
     // 用户手动挪过窗口，展开前的位置不再有效
@@ -298,11 +426,20 @@ export class QuickWindow {
   }
 
   moveDrag(mouseX: number, mouseY: number): void {
-    if (!this.dragOrigin) return
-    this.window.setPosition(
-      Math.round(this.dragOrigin.x + (mouseX - this.dragOrigin.mouseX)),
-      Math.round(this.dragOrigin.y + (mouseY - this.dragOrigin.mouseY)),
-    )
+    const origin = this.dragOrigin
+    if (!origin) return
+    if (!Number.isFinite(mouseX) || !Number.isFinite(mouseY)) return
+
+    const x = Math.round(origin.x + (mouseX - origin.mouseX))
+    const y = Math.round(origin.y + (mouseY - origin.mouseY))
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+
+    try {
+      this.window.setPosition(x, y)
+    } catch (error) {
+      // 窗口正在收起/销毁时可能拒绝移动，不能让主进程弹出未捕获异常
+      console.error('[快捷窗口] 拖动失败:', error)
+    }
   }
 
   endDrag(): void {
@@ -313,6 +450,11 @@ export class QuickWindow {
 
   // ── 形态切换 ──────────────────────────────────────────────
 
+  /** 当前是否处于有内容的展开态（本地快捷键用） */
+  isContentMode(): boolean {
+    return this.mode === 'content'
+  }
+
   /** 切换空态 ↔ 有内容态 */
   setMode(mode: QuickMode): void {
     if (mode === this.mode) return
@@ -320,19 +462,37 @@ export class QuickWindow {
     const previous = this.mode
     this.mode = mode
 
+    // 切形态时历史弹框不能留着：空态撑高的窗口要交还给新的布局
+    this.cancelHistoryCollapse()
+    if (this.historyOpen) {
+      this.historyOpen = false
+      this.window.setHasShadow(true)
+      this.sendEvent({ type: 'history-panel', open: false })
+    }
+
     if (mode === 'content') {
       const target = this.contentBoundsFromCurrent()
       this.window.setResizable(true)
 
-      if (previous === 'empty' && this.visible) {
-        // 用户发出第一条消息：下移 → 向上长高 → 内容淡入
-        this.animateExpand(target)
-      } else {
-        this.window.setBounds(target)
-        this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
-        this.sendEvent({ type: 'transition-done' })
+      if (previous === 'empty') {
+        // 记住空态底边，反向（新对话）时回到这里
+        const from = this.window.getBounds()
+        this.preExpandBottom = from.y + from.height
       }
 
+      // 动效开关打开时走原来的动画；关闭时直接展示最终效果
+      if (ENABLE_TRANSITION_ANIMATION && previous === 'empty' && this.visible) {
+        this.animateExpand(target)
+        this.logBounds(mode)
+        this.sendEvent({ type: 'mode-changed', mode })
+        return
+      }
+
+      this.window.setBounds(target)
+      this.bottomY = target.y + target.height
+      this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
+      this.persistBounds()
+      this.sendEvent({ type: 'transition-done' })
       this.logBounds(mode)
       this.sendEvent({ type: 'mode-changed', mode })
       return
@@ -356,14 +516,18 @@ export class QuickWindow {
       height: QUICK_WINDOW_MIN_HEIGHT,
     }
 
-    if (previous === 'content' && this.visible) {
-      // 反向：先把高度收掉，再整体上移收窄；结束后才通知界面切空态
+    // 动效开关打开时走原来的反向动画；关闭时直接回到空态
+    if (ENABLE_TRANSITION_ANIMATION && previous === 'content' && this.visible) {
       this.animateCollapse(bounds, target)
-    } else {
-      this.window.setBounds(target)
-      this.logBounds(mode)
-      this.sendEvent({ type: 'mode-changed', mode })
+      return
     }
+
+    this.window.setBounds(target)
+    this.bottomY = target.y + target.height
+    this.preExpandBottom = null
+    this.persistBounds()
+    this.logBounds(mode)
+    this.sendEvent({ type: 'mode-changed', mode })
   }
 
   private logBounds(mode: QuickMode): void {
@@ -459,8 +623,8 @@ export class QuickWindow {
       area.x + area.width - width,
     )
 
-    // 底边：先下移一小段，再把“放不下”的部分补上
-    let bottom = bounds.y + bounds.height + EXPAND_SHIFT
+    // 底边：窗口最终下移一个发送按钮的高度（30px，已含底部 10px 间距）；屏幕放不下时夹取
+    let bottom = bounds.y + bounds.height + TRANSITION_WINDOW_DOWN
     bottom = Math.min(bottom, area.y + area.height - EDGE_MARGIN)
     let y = bottom - height
 
@@ -476,47 +640,91 @@ export class QuickWindow {
     return { x, y, width, height }
   }
 
-  /** 下移 → 向上长高，结束后通知界面淡入内容 */
+  /**
+   * 给定展开的起点/终点和进度，算出当前窗口框。
+   *
+   * 时间轴分两段：
+   *   0–50%：宽度撑到终点宽，高度只长 20px（四周露出 10px），底边间距 0→10
+   *   50–100%：宽度不变，底边不动，高度长到终点
+   * 整体下移按全程 easing 单独叠加。
+   */
+  private transitionBounds(start: Rectangle, end: Rectangle, progress: number): Rectangle {
+    const t = clamp(progress, 0, 1)
+    const startBottom = start.y + start.height
+    const endBottom = end.y + end.height
+    // 终点底边比起点多出来的部分 = 第二步的整体下移 + 底部 10px 间距
+    const downShift = endBottom - startBottom - TRANSITION_FRAME_GAP
+
+    let width: number
+    let height: number
+    let gap: number
+    let center: number
+
+    if (t <= 0.5) {
+      // 第一阶段：只把四周 10px 外框撑出来，不整体下移
+      const k = easeSwing(t / 0.5)
+      width = lerp(start.width, end.width, k)
+      height = lerp(start.height, start.height + TRANSITION_FRAME_GAP * 2, k)
+      gap = TRANSITION_FRAME_GAP * k
+      center = lerp(start.x + start.width / 2, end.x + end.width / 2, k)
+    } else {
+      // 第二阶段：向上展开，同时完成整体下移
+      const k = easeSwing((t - 0.5) / 0.5)
+      width = end.width
+      height = lerp(start.height + TRANSITION_FRAME_GAP * 2, end.height, k)
+      gap = TRANSITION_FRAME_GAP
+      center = end.x + end.width / 2
+    }
+
+    const down = t <= 0.5 ? 0 : downShift * easeSwing((t - 0.5) / 0.5)
+    const bottom = startBottom + down + gap
+
+    // 宽度取偶数、x 由中心反推：避免窗口和输入框出现半像素抖动
+    const evenWidth = Math.max(2, Math.round(width / 2) * 2)
+    return {
+      x: Math.round(center - evenWidth / 2),
+      y: Math.round(bottom - height),
+      width: evenWidth,
+      height: Math.max(1, Math.round(height)),
+    }
+  }
+
+  /** 展开：空态 → 有内容态，结束后通知界面淡入内容 */
   private animateExpand(target: Rectangle): void {
     this.cancelAnimation()
 
-    const from = this.window.getBounds()
-    const startBottom = from.y + from.height
-    const targetBottom = target.y + target.height
+    const current = this.window.getBounds()
+    /*
+     * 发送前输入框可能折行、空态窗口已经长到 200 高。
+     * 动画的基准是 400×100：先把高度收回 100（底边不动），否则
+     * 输入框会从 200 直接跳到 100，看起来像是向下多走了一大段。
+     */
+    const from: Rectangle =
+      current.height === QUICK_WINDOW_MIN_HEIGHT
+        ? current
+        : {
+            x: current.x,
+            y: current.y + current.height - QUICK_WINDOW_MIN_HEIGHT,
+            width: current.width,
+            height: QUICK_WINDOW_MIN_HEIGHT,
+          }
+
+    if (current.height !== QUICK_WINDOW_MIN_HEIGHT) {
+      this.currentHeight = QUICK_WINDOW_MIN_HEIGHT
+      this.window.setBounds(from)
+    }
+
     const startedAt = Date.now()
     this.animating = true
     this.animationTarget = target
-    this.preExpandBottom = startBottom
+    this.preExpandBottom = from.y + from.height
 
     this.animationTimer = setInterval(() => {
-      const elapsed = Date.now() - startedAt
-
-      if (elapsed < PHASE_MOVE_MS) {
-        // 第一阶段：大小不变，整块往下挪到目标底边
-        const k = easeOut(elapsed / PHASE_MOVE_MS)
-        const bottom = Math.round(lerp(startBottom, targetBottom, k))
-        this.window.setBounds({
-          x: Math.round(lerp(from.x, target.x, k)),
-          y: bottom - from.height,
-          width: Math.round(lerp(from.width, target.width, k)),
-          height: from.height,
-        })
+      const t = clamp((Date.now() - startedAt) / TRANSITION_TOTAL_MS, 0, 1)
+      if (t < 1) {
+        this.window.setBounds(this.transitionBounds(from, target, t))
         return
       }
-
-      if (elapsed < PHASE_MOVE_MS + PHASE_GROW_MS) {
-        // 第二阶段：底边不动，高度一路长到默认高度
-        const k = easeOut((elapsed - PHASE_MOVE_MS) / PHASE_GROW_MS)
-        const height = Math.round(lerp(from.height, target.height, k))
-        this.window.setBounds({
-          x: target.x,
-          y: targetBottom - height,
-          width: target.width,
-          height,
-        })
-        return
-      }
-
       this.window.setBounds(target)
       this.finishExpand()
     }, FRAME_MS)
@@ -545,47 +753,22 @@ export class QuickWindow {
     this.sendEvent({ type: 'transition-done' })
   }
 
-  /**
-   * 收回空态：展开动画的反方向。
-   * 阶段一（280ms）：高度一路收掉，顶边往下走、底边不动；
-   * 阶段二（140ms）：整体上移回展开前的底边，宽度 420 → 400。
-   */
+  /** 收起：把展开动画倒着播放，回到空态 */
   private animateCollapse(from: Rectangle, target: Rectangle): void {
     this.cancelAnimation()
 
-    const startBottom = from.y + from.height
-    const targetBottom = target.y + target.height
     const startedAt = Date.now()
     this.animating = true
     this.animationTarget = target
 
     this.animationTimer = setInterval(() => {
-      const elapsed = Date.now() - startedAt
-
-      if (elapsed < PHASE_GROW_MS) {
-        const k = easeOut(elapsed / PHASE_GROW_MS)
-        const height = Math.round(lerp(from.height, target.height, k))
-        this.window.setBounds({
-          x: from.x,
-          y: startBottom - height,
-          width: from.width,
-          height,
-        })
+      const t = clamp((Date.now() - startedAt) / TRANSITION_TOTAL_MS, 0, 1)
+      if (t < 1) {
+        // 把 target → from 的展开过程倒着播
+        this.window.setBounds(this.transitionBounds(target, from, 1 - t))
         return
       }
-
-      if (elapsed < PHASE_GROW_MS + PHASE_MOVE_MS) {
-        const k = easeOut((elapsed - PHASE_GROW_MS) / PHASE_MOVE_MS)
-        const bottom = Math.round(lerp(startBottom, targetBottom, k))
-        this.window.setBounds({
-          x: Math.round(lerp(from.x, target.x, k)),
-          y: bottom - target.height,
-          width: Math.round(lerp(from.width, target.width, k)),
-          height: target.height,
-        })
-        return
-      }
-
+      this.window.setBounds(target)
       this.finishCollapse(target)
     }, FRAME_MS)
   }
