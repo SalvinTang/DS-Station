@@ -23,6 +23,8 @@ const api: DsApi = {
   openSettings: () => ipcRenderer.send('ds:open-settings'),
   getSettings: () => ipcRenderer.invoke('ds:get-settings'),
   setHotkey: (accelerator: string) => ipcRenderer.invoke('ds:set-hotkey', accelerator),
+  setQuickShortcut: (name: 'newChat' | 'history', accelerator: string) =>
+    ipcRenderer.invoke('ds:set-quick-shortcut', name, accelerator),
   setResetAfter: (minutes: number) => ipcRenderer.invoke('ds:set-reset-after', minutes),
   setLanguage: (language: Language) => ipcRenderer.invoke('ds:set-language', language),
   setTheme: (theme: ThemeSetting) => ipcRenderer.invoke('ds:set-theme', theme),

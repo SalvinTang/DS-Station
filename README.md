@@ -16,7 +16,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/DSD_Introduction.gif" alt="DS Desktop 快捷窗口演示" width="480">
+  <img src="docs/images/DSD_Introduction.gif" alt="DS Station 快捷窗口演示" width="480">
 </p>
 
 ---
@@ -37,7 +37,6 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 不管你在写代码、看文档还是刷网页，按 <kbd>⌥</kbd><kbd>Space</kbd>，面板就浮到眼前。
 不抢桌面、不切 App、不需要先找到浏览器标签页。
 
-问完按 <kbd>Esc</kbd>，它消失，焦点自动还给你刚才在用的应用。
 
 ### 看着小，功能完整 ✨
 
@@ -82,13 +81,10 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 
 | 操作 | 快捷键 |
 |---|---|
-| 呼出 / 收起快捷窗口 | <kbd>⌥</kbd><kbd>Space</kbd>（可自定义） |
+| 呼出 / 收起快捷窗口 | <kbd>⌥</kbd><kbd>Space</kbd> |
 | 收起快捷窗口 | <kbd>Esc</kbd> |
-| 打开设置 | <kbd>⌘</kbd><kbd>,</kbd> |
-| 复制回答 | 点击回答下方的复制按钮 |
+| 历史对话 | <kbd>⌘</kbd><kbd>Y</kbd> |
 
-> 💡 **小技巧**：把鼠标移到面板上，顶部功能栏会出现 —— 关闭、扩大、新对话都在那儿。
-> 不看消息的时候它会自动让开，不占地方。
 
 ---
 
@@ -109,7 +105,7 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 它的工作方式是驱动你自己登录的网页版 —— 不破解、不绕过登录，也不批量调用接口。
 使用时仍需遵守 DeepSeek 的服务条款。
 
-如果你觉得它好用，请Star；遇到 DeepSeek 改版导致的失效，也欢迎反馈。
+如果你觉得它好用，请Star；遇到问题欢迎反馈。
 
 ---
 

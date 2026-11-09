@@ -147,6 +147,10 @@ const tbExpand = document.getElementById('tbExpand')
 let mode: QuickMode = 'empty'
 /** 历史弹框是否展开 */
 let historyOpen = false
+/** 通过快捷键打开历史弹框时，等列表回来后默认选中第一条 */
+let historyKeyboardSelect = false
+/** 当前键盘选中的历史条目下标，-1 表示没有选中 */
+let historySelectedIndex = -1
 /** 历史列表还能不能继续加载 */
 let historyHasMore = false
 /** 已经请求过「加载更多」，等主进程回话 */
@@ -321,6 +325,8 @@ function applyHistoryPanel(open: boolean): void {
 
     historyPanel.hidden = false
     placeHistoryPanel()
+    // 列表可能还是上一次的；快捷键打开时先把第一条选中
+    if (historyList.children.length > 0) applyPendingHistorySelection()
     requestAnimationFrame(() => {
       // 这一帧之前用户又关掉了，就不要再打开，否则会闪一下
       if (!historyOpen) return
@@ -331,6 +337,8 @@ function applyHistoryPanel(open: boolean): void {
   }
 
   historyPanel.classList.remove('open')
+  historyKeyboardSelect = false
+  clearHistorySelection()
   historyLoadPending = false
   historyHasMore = false
   // 保留列表 DOM，下次打开可以立即显示；淡出动画结束后再真正藏起来
@@ -339,6 +347,39 @@ function applyHistoryPanel(open: boolean): void {
     historyHideTimer = undefined
     if (!historyOpen) historyPanel.hidden = true
   }, 160)
+}
+
+function historyItemElements(): HTMLButtonElement[] {
+  return Array.from(historyList.querySelectorAll('.history-item')) as HTMLButtonElement[]
+}
+
+function clearHistorySelection(): void {
+  historySelectedIndex = -1
+  for (const item of historyItemElements()) item.classList.remove('selected')
+}
+
+function setHistorySelection(index: number, scroll = true): void {
+  const items = historyItemElements()
+  if (!items.length) {
+    historySelectedIndex = -1
+    return
+  }
+
+  const next = Math.max(0, Math.min(items.length - 1, index))
+  items.forEach((item, itemIndex) => item.classList.toggle('selected', itemIndex === next))
+  historySelectedIndex = next
+  if (scroll) items[next]?.scrollIntoView({ block: 'nearest' })
+}
+
+/** 列表刷新后恢复键盘选中状态；快捷键打开时默认第一条 */
+function applyPendingHistorySelection(): void {
+  if (historyKeyboardSelect && historyList.children.length > 0) {
+    historyKeyboardSelect = false
+    setHistorySelection(0)
+    return
+  }
+
+  if (historySelectedIndex >= 0) setHistorySelection(historySelectedIndex, false)
 }
 
 function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
@@ -361,6 +402,7 @@ function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
       historyPanel.classList.remove('loading')
       historyPanel.classList.toggle('empty', items.length === 0)
       placeHistoryPanel()
+      applyPendingHistorySelection()
       return
     }
 
@@ -390,6 +432,7 @@ function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
   historyPanel.classList.remove('loading')
   historyPanel.classList.toggle('empty', historyList.children.length === 0)
   placeHistoryPanel()
+  if (!append) applyPendingHistorySelection()
 }
 
 /** 点「历史」胶囊：先给反馈，再让主进程去页面里读 */
@@ -1029,6 +1072,18 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       break
     }
 
+    case 'history-shortcut': {
+      if (busy || stopping || historyLoading) break
+      if (historyOpen) {
+        applyHistoryPanel(false)
+        window.ds?.toggleQuickHistory(false)
+        break
+      }
+      historyKeyboardSelect = true
+      requestHistoryToggle()
+      break
+    }
+
     case 'history-panel': {
       applyHistoryPanel(event.open)
       break
@@ -1164,10 +1219,40 @@ input.addEventListener('input', () => {
 })
 
 input.addEventListener('keydown', (event) => {
+  // 历史弹框展开时，回车留给列表确认，不要发送消息
+  if (historyOpen) {
+    if (event.key === 'Enter') event.preventDefault()
+    return
+  }
+
   // isComposing：中文输入法选词时的回车不能当成发送
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
     submit()
+  }
+})
+
+// 历史弹框展开时：上下键切换，回车确认
+document.addEventListener('keydown', (event) => {
+  if (!historyOpen) return
+
+  const items = historyItemElements()
+  if (!items.length) return
+
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (historySelectedIndex < 0) {
+      setHistorySelection(0)
+    } else {
+      setHistorySelection(historySelectedIndex + (event.key === 'ArrowDown' ? 1 : -1))
+    }
+    return
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    const index = historySelectedIndex >= 0 ? historySelectedIndex : 0
+    items[index]?.click()
   }
 })
 

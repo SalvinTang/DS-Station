@@ -55,6 +55,8 @@ export type QuickEvent =
   | { type: 'history-loaded'; messages: HistoryMessage[]; hasOlder: boolean; source?: 'api' | 'dom' }
   /** 按需加载的更早历史消息（prepend 到列表顶部） */
   | { type: 'history-prepended'; messages: HistoryMessage[]; hasOlder: boolean }
+  /** 本地快捷键：打开/关闭历史对话（Ctrl/⌘+H） */
+  | { type: 'history-shortcut' }
 
 export interface QuickSubmitPayload {
   text: string
@@ -88,6 +90,12 @@ export interface SettingsSnapshot {
   /** Electron accelerator，例如 'Alt+Space' */
   hotkey: string
   hotkeyDisplay: string
+  /** 快捷窗口激活时，新对话的本地快捷键 */
+  newChatShortcut: string
+  newChatShortcutDisplay: string
+  /** 快捷窗口激活时，打开历史对话的本地快捷键 */
+  historyShortcut: string
+  historyShortcutDisplay: string
   /** 0 表示「从不」重置 */
   resetAfterMinutes: number
   version: string
@@ -111,6 +119,11 @@ export interface DsApi {
   openSettings: () => void
   getSettings: () => Promise<SettingsSnapshot>
   setHotkey: (accelerator: string) => Promise<HotkeyUpdateResult>
+  /** 修改快捷窗口内的本地快捷键（newChat / history） */
+  setQuickShortcut: (
+    name: 'newChat' | 'history',
+    accelerator: string,
+  ) => Promise<HotkeyUpdateResult>
   setResetAfter: (minutes: number) => Promise<void>
   setLanguage: (language: Language) => Promise<void>
   setTheme: (theme: ThemeSetting) => Promise<void>

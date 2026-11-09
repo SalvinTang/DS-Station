@@ -18,7 +18,13 @@ import { DeepSeekPage, delay, type StreamToken } from './deepseek/page-driver'
 import { buildAppMenu } from './menu'
 import { getDeepseekSession } from './session'
 import { currentLanguage, load, messages, save } from './settings'
-import { registerQuickHotkey, toDisplayAccelerator, unregisterAllHotkeys } from './shortcut'
+import {
+  acceleratorSignature,
+  matchesAccelerator,
+  registerQuickHotkey,
+  toDisplayAccelerator,
+  unregisterAllHotkeys,
+} from './shortcut'
 import { StartupFlow } from './startup'
 import { createTray, refreshTrayMenu, trayDebugState } from './tray'
 import { MainWindow } from './windows/main-window'
@@ -160,6 +166,15 @@ if (!app.requestSingleInstanceLock()) {
       void new DeepSeekPage(mainWindow!.pageView).installApiHeaderHook()
     })
 
+    // 菜单里不再用 role: 'hide'，把 ⌘H 让给快捷窗口的历史快捷键；
+    // 主窗口聚焦时仍然保留 macOS 的 ⌘H 隐藏应用习惯。
+    mainWindow.pageView.webContents.on('before-input-event', (event, input) => {
+      if (matchesAccelerator(input, 'Command+H')) {
+        event.preventDefault()
+        app.hide()
+      }
+    })
+
     createTray({ showMainWindow: () => mainWindow?.show() })
 
     // 快捷窗口纯自绘、开销可忽略，直接建好 —— 免得第一次按快捷键要等
@@ -167,6 +182,37 @@ if (!app.requestSingleInstanceLock()) {
       () => mainWindow?.isVisible ?? false,
       () => void startNewChatOnPage(),
     )
+
+    /*
+     * 快捷窗口内的本地快捷键。
+     * before-input-event 只有这个窗口拿到焦点时才会触发，
+     * 天然满足「只在快捷窗口激活时生效」。
+     * event.preventDefault() 也会顺带吃掉 macOS 默认的 ⌘H（隐藏应用）。
+     */
+    quickWindow.window.webContents.on('before-input-event', (event, input) => {
+      const quick = quickWindow
+      if (!quick || !quick.window.isFocused()) return
+
+      const shortcuts = load().quickWindow
+      if (matchesAccelerator(input, shortcuts.newChatShortcut)) {
+        if (!quick.isContentMode()) return
+        event.preventDefault()
+        void startNewChatOnPage()
+        return
+      }
+
+      if (matchesAccelerator(input, shortcuts.historyShortcut)) {
+        event.preventDefault()
+        quick.sendEvent({ type: 'history-shortcut' })
+        return
+      }
+
+      // 历史快捷键不是 ⌘H 时，⌘H 仍按 macOS 习惯隐藏应用
+      if (matchesAccelerator(input, 'Command+H')) {
+        event.preventDefault()
+        app.hide()
+      }
+    })
 
     registerIpcHandlers()
 
@@ -294,6 +340,11 @@ if (!app.requestSingleInstanceLock()) {
       runModeTransitionSelfCheck(quickWindow)
     }
 
+    // 本地快捷键自检：⌘H 打开历史、⌘N 新对话，且不能触发系统隐藏
+    if (process.env.DS_SHORTCUT_TEST === '1') {
+      runLocalShortcutSelfCheck(quickWindow)
+    }
+
     // 接口 Markdown 渲染自检
     if (process.env.DS_API_MD_TEST === '1') {
       runApiMarkdownSelfCheck(quickWindow)
@@ -355,6 +406,19 @@ function registerIpcHandlers(): void {
   ipcMain.handle('ds:get-settings', (): SettingsSnapshot => settingsSnapshot())
   ipcMain.handle('ds:set-hotkey', (_event, accelerator: unknown): HotkeyUpdateResult =>
     handleSetHotkey(typeof accelerator === 'string' ? accelerator : ''),
+  )
+  ipcMain.handle(
+    'ds:set-quick-shortcut',
+    (_event, name: unknown, accelerator: unknown): HotkeyUpdateResult => {
+      if ((name !== 'newChat' && name !== 'history') || typeof accelerator !== 'string') {
+        return {
+          ok: false,
+          message: translate(currentLanguage(), 'settings.shortcutTaken'),
+          display: '',
+        }
+      }
+      return handleSetQuickShortcut(name, accelerator)
+    },
   )
   ipcMain.handle('ds:set-reset-after', (_event, minutes: unknown) => {
     if (typeof minutes === 'number' && Number.isFinite(minutes) && minutes >= 0) {
@@ -447,6 +511,10 @@ function settingsSnapshot(): SettingsSnapshot {
     theme: settings.theme,
     hotkey: settings.quickWindow.hotkey,
     hotkeyDisplay: toDisplayAccelerator(settings.quickWindow.hotkey),
+    newChatShortcut: settings.quickWindow.newChatShortcut,
+    newChatShortcutDisplay: toDisplayAccelerator(settings.quickWindow.newChatShortcut),
+    historyShortcut: settings.quickWindow.historyShortcut,
+    historyShortcutDisplay: toDisplayAccelerator(settings.quickWindow.historyShortcut),
     resetAfterMinutes: settings.quickWindow.resetAfterMinutes,
     // 版本号四段：前三段取 package.json，第四段是构建号（定宽 3 位）。
     // 前三段只有用户明确要求时才改。
@@ -463,6 +531,19 @@ function handleSetHotkey(accelerator: string): HotkeyUpdateResult {
     return {
       ok: false,
       message: translate(lang, 'settings.hotkeyNeedModifier'),
+      display: toDisplayAccelerator(previous),
+    }
+  }
+
+  const signature = acceleratorSignature(candidate)
+  const shortcuts = load().quickWindow
+  if (
+    signature === acceleratorSignature(shortcuts.newChatShortcut) ||
+    signature === acceleratorSignature(shortcuts.historyShortcut)
+  ) {
+    return {
+      ok: false,
+      message: translate(lang, 'settings.shortcutTaken'),
       display: toDisplayAccelerator(previous),
     }
   }
@@ -487,6 +568,50 @@ function handleSetHotkey(accelerator: string): HotkeyUpdateResult {
     ok: true,
     message: translate(lang, 'settings.hotkeyOk'),
     display: toDisplayAccelerator(result.accelerator),
+  }
+}
+
+/** 修改快捷窗口内的本地快捷键（只在快捷窗口激活时生效） */
+function handleSetQuickShortcut(
+  name: 'newChat' | 'history',
+  accelerator: string,
+): HotkeyUpdateResult {
+  const lang = currentLanguage()
+  const shortcuts = load().quickWindow
+  const previous = name === 'newChat' ? shortcuts.newChatShortcut : shortcuts.historyShortcut
+  const candidate = accelerator.trim()
+  const signature = candidate ? acceleratorSignature(candidate) : ''
+
+  // 必须带修饰键，且不能和全局呼出键、另一个本地键重复
+  if (!/^(command|control|alt|shift)\+/.test(signature)) {
+    return {
+      ok: false,
+      message: translate(lang, 'settings.hotkeyNeedModifier'),
+      display: toDisplayAccelerator(previous),
+    }
+  }
+
+  const other = name === 'newChat' ? shortcuts.historyShortcut : shortcuts.newChatShortcut
+  if (
+    signature === acceleratorSignature(other) ||
+    signature === acceleratorSignature(shortcuts.hotkey)
+  ) {
+    return {
+      ok: false,
+      message: translate(lang, 'settings.shortcutTaken'),
+      display: toDisplayAccelerator(previous),
+    }
+  }
+
+  save({
+    quickWindow:
+      name === 'newChat' ? { newChatShortcut: candidate } : { historyShortcut: candidate },
+  })
+
+  return {
+    ok: true,
+    message: translate(lang, 'settings.hotkeyOk'),
+    display: toDisplayAccelerator(candidate),
   }
 }
 
@@ -1756,6 +1881,95 @@ function runScrollSelfCheck(quick: QuickWindow | null): void {
 }
 
 /** 历史对话功能自检：打开弹框 → 读列表 → 选第一条 → 检查快捷窗口内容 */
+/** 自检：快捷窗口内的本地快捷键（⌘H / ⌘N） */
+function runLocalShortcutSelfCheck(quick: QuickWindow | null): void {
+  if (!quick) return
+
+  setTimeout(() => {
+    quick.show()
+    app.focus({ steal: true })
+    quick.window.focus()
+  }, 800)
+
+  setTimeout(async () => {
+    quick.setMode('content')
+    await delay(300)
+    app.focus({ steal: true })
+    quick.window.show()
+    quick.window.focus()
+    await delay(200)
+    console.log(
+      '[快捷键测试] 初始:',
+      JSON.stringify({
+        content: quick.isContentMode(),
+        focused: quick.window.isFocused(),
+        visible: quick.window.isVisible(),
+        appHidden: app.isHidden(),
+      }),
+    )
+
+    quick.window.webContents.sendInputEvent({
+      type: 'keyDown',
+      keyCode: 'y',
+      modifiers: ['meta'],
+    })
+    quick.window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'y', modifiers: ['meta'] })
+    await delay(600)
+
+    const panel = await quick.window.webContents.executeJavaScript(`(() => {
+      const el = document.getElementById('historyPanel')
+      return {
+        open: el.classList.contains('open'),
+        hidden: el.hidden,
+        items: document.querySelectorAll('.history-item').length,
+        selected: document.querySelectorAll('.history-item.selected').length,
+      }
+    })()`)
+    console.log(
+      '[快捷键测试] ⌘Y 后:',
+      JSON.stringify({
+        panel,
+        appHidden: app.isHidden(),
+        windowVisible: quick.window.isVisible(),
+        content: quick.isContentMode(),
+      }),
+    )
+
+    if (panel.items > 0) {
+      quick.window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })
+      quick.window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Down' })
+      await delay(250)
+      const selectedIndex = await quick.window.webContents.executeJavaScript(
+        `[...document.querySelectorAll('.history-item')].findIndex((el) => el.classList.contains('selected'))`,
+      )
+      console.log('[快捷键测试] ↓ 后 selectedIndex:', selectedIndex)
+
+      quick.window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
+      quick.window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+      await delay(1200)
+      const afterEnter = await quick.window.webContents.executeJavaScript(`(() => ({
+        panelOpen: document.getElementById('historyPanel').classList.contains('open'),
+        panelHidden: document.getElementById('historyPanel').hidden,
+        users: document.querySelectorAll('.msg-user').length,
+        answers: document.querySelectorAll('.msg-ai').length,
+        mode: document.getElementById('app').dataset.mode,
+      }))()`)
+      console.log('[快捷键测试] 回车后:', JSON.stringify(afterEnter))
+      process.exit(0)
+    }
+
+    quick.window.webContents.sendInputEvent({
+      type: 'keyDown',
+      keyCode: 'n',
+      modifiers: ['meta'],
+    })
+    quick.window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'n', modifiers: ['meta'] })
+    await delay(600)
+    console.log('[快捷键测试] ⌘N 后 content:', quick.isContentMode())
+    process.exit(0)
+  }, 1500)
+}
+
 /** 自检：空态 ↔ 有内容态动画的窗口尺寸和输入框位置 */
 function runModeTransitionSelfCheck(quick: QuickWindow | null): void {
   if (!quick) return
@@ -2280,7 +2494,17 @@ function runMarkdownUiSelfCheck(quick: QuickWindow | null): void {
           const composer = document.querySelector('.composer');
           const fr = fade ? fade.getBoundingClientRect() : null;
           const cr = composer ? composer.getBoundingClientRect() : null;
+          const messageBox = document.getElementById('messages');
+          const answerBody = document.querySelector('.msg-ai .body');
+          const mb = messageBox ? messageBox.getBoundingClientRect() : null;
+          const ab = answerBody ? answerBody.getBoundingClientRect() : null;
           return {
+            margins: mb && ab ? {
+              left: Math.round(ab.left - mb.left),
+              right: Math.round(mb.right - ab.right),
+              clientWidth: messageBox.clientWidth,
+              offsetWidth: messageBox.offsetWidth,
+            } : null,
             fade: fade && fr && cr ? {
               rect: [Math.round(fr.left), Math.round(fr.top), Math.round(fr.width), Math.round(fr.height)],
               bottom: Math.round(fr.bottom),

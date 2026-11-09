@@ -8,9 +8,9 @@ import { join } from 'node:path'
  * （快捷键 / 重置为新聊天 / 语言 / 版本号）与「退出登录」在 P4 实现。
  */
 
-// 设计稿画板尺寸（设置页调整.html：360×460）
-const WIDTH = 360
-const HEIGHT = 460
+// 设置页：快捷窗口多了两个本地快捷键，窗口加宽加高，内容分组展示
+const WIDTH = 420
+const HEIGHT = 640
 
 let instance: BrowserWindow | null = null
 

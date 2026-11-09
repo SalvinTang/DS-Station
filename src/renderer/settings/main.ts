@@ -1,8 +1,9 @@
 /**
  * 设置窗口。
  *
- * 四项设置 + 退出登录。所有文案走主进程发来的文案表，
- * 所以切换语言后重开这个窗口就会跟着变。
+ * 快捷窗口的呼出快捷键、新对话/历史对话本地快捷键，以及
+ * 重置时间、语言、主题、版本号和退出登录。
+ * 所有文案走主进程发来的文案表，所以切换语言后重开这个窗口会跟着变。
  */
 
 import type { Language } from '../../shared/i18n'
@@ -23,13 +24,20 @@ function t(key: string, vars?: Record<string, string | number>): string {
 const el = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
 
 const titleEl = el('title')
+const groupShortcuts = el('groupShortcuts')
+const groupAppearance = el('groupAppearance')
 const lbHotkey = el('lbHotkey')
+const lbNewChatShortcut = el('lbNewChatShortcut')
+const lbHistoryShortcut = el('lbHistoryShortcut')
 const lbReset = el('lbReset')
 const lbLanguage = el('lbLanguage')
 const lbTheme = el('lbTheme')
 const lbVersion = el('lbVersion')
+const hintHotkey = el('hintHotkey')
+const hintNewChat = el('hintNewChat')
+const hintHistory = el('hintHistory')
+const hintReset = el('hintReset')
 
-const hotkeyButton = el<HTMLButtonElement>('hotkey')
 const resetSelect = el<HTMLSelectElement>('resetAfter')
 const languageSelect = el<HTMLSelectElement>('language')
 const themeSelect = el<HTMLSelectElement>('theme')
@@ -43,7 +51,7 @@ const confirmDetail = el('confirmDetail')
 const cancelButton = el<HTMLButtonElement>('cancel')
 const confirmLogoutButton = el<HTMLButtonElement>('confirmLogout')
 
-// ── 时间选项（设计稿默认 10 分钟）────────────────────────────
+// ── 时间选项（默认 10 分钟）────────────────────────────────────
 
 const RESET_CHOICES = [0, 5, 10, 30, 60, 120]
 
@@ -55,14 +63,42 @@ function resetLabel(minutes: number): string {
 
 // ── 快捷键录入 ────────────────────────────────────────────────
 
-let recording = false
-let savedHotkeyDisplay = ''
+type ShortcutField = 'hotkey' | 'newChat' | 'history'
 
-function stopRecording(display?: string): void {
-  recording = false
-  hotkeyButton.classList.remove('recording')
-  if (display) savedHotkeyDisplay = display
-  hotkeyButton.textContent = savedHotkeyDisplay || '—'
+const shortcutButtons: Record<ShortcutField, HTMLButtonElement> = {
+  hotkey: el<HTMLButtonElement>('hotkey'),
+  newChat: el<HTMLButtonElement>('newChatShortcut'),
+  history: el<HTMLButtonElement>('historyShortcut'),
+}
+
+const shortcutDisplays: Record<ShortcutField, string> = {
+  hotkey: '',
+  newChat: '',
+  history: '',
+}
+
+let recording: ShortcutField | null = null
+
+function stopRecording(field: ShortcutField, display?: string): void {
+  if (recording === field) recording = null
+  const button = shortcutButtons[field]
+  button.classList.remove('recording')
+  if (display !== undefined) shortcutDisplays[field] = display
+  button.textContent = shortcutDisplays[field] || '—'
+}
+
+function beginRecording(field: ShortcutField): void {
+  if (recording === field) {
+    stopRecording(field)
+    return
+  }
+  if (recording) stopRecording(recording)
+
+  recording = field
+  const button = shortcutButtons[field]
+  button.classList.add('recording')
+  button.textContent = t('settings.shortcutRecording')
+  setStatus('')
 }
 
 function setStatus(text: string, ok?: boolean): void {
@@ -128,16 +164,9 @@ function mapKey(code: string): string | null {
   return named[code] ?? null
 }
 
-hotkeyButton.addEventListener('click', () => {
-  recording = !recording
-  if (recording) {
-    hotkeyButton.classList.add('recording')
-    hotkeyButton.textContent = t('settings.hotkeyRecording')
-    setStatus('')
-  } else {
-    stopRecording()
-  }
-})
+for (const field of Object.keys(shortcutButtons) as ShortcutField[]) {
+  shortcutButtons[field].addEventListener('click', () => beginRecording(field))
+}
 
 window.addEventListener('keydown', (event) => {
   if (!recording) return
@@ -146,7 +175,7 @@ window.addEventListener('keydown', (event) => {
   event.stopPropagation()
 
   if (event.key === 'Escape') {
-    stopRecording()
+    stopRecording(recording)
     return
   }
 
@@ -156,8 +185,19 @@ window.addEventListener('keydown', (event) => {
     return
   }
 
-  void window.ds?.setHotkey(accelerator).then((result) => {
-    stopRecording(result.display)
+  const field = recording
+
+  if (field === 'hotkey') {
+    void window.ds?.setHotkey(accelerator).then((result) => {
+      stopRecording('hotkey', result.display)
+      setStatus(result.message, result.ok)
+    })
+    return
+  }
+
+  const name = field === 'newChat' ? 'newChat' : 'history'
+  void window.ds?.setQuickShortcut(name, accelerator).then((result) => {
+    stopRecording(field, result.display)
     setStatus(result.message, result.ok)
   })
 })
@@ -203,19 +243,31 @@ async function init(): Promise<void> {
   messages = snapshot.messages
 
   titleEl.textContent = t('settings.title')
+  groupShortcuts.textContent = t('settings.groupShortcuts')
+  groupAppearance.textContent = t('settings.groupAppearance')
   lbHotkey.textContent = t('settings.hotkey')
+  lbNewChatShortcut.textContent = t('settings.newChatShortcut')
+  lbHistoryShortcut.textContent = t('settings.historyShortcut')
   lbReset.textContent = t('settings.resetAfter')
   lbLanguage.textContent = t('settings.language')
   lbTheme.textContent = t('settings.theme')
   lbVersion.textContent = t('settings.version')
+  hintHotkey.textContent = t('settings.hotkeyHint')
+  hintNewChat.textContent = t('settings.newChatShortcutHint')
+  hintHistory.textContent = t('settings.historyShortcutHint')
+  hintReset.textContent = t('settings.resetHint')
   logoutButton.textContent = t('settings.logout')
   confirmTitle.textContent = t('settings.logoutConfirm')
   confirmDetail.textContent = t('settings.logoutDetail')
   cancelButton.textContent = t('settings.cancel')
   confirmLogoutButton.textContent = t('settings.logout')
 
-  savedHotkeyDisplay = snapshot.hotkeyDisplay
-  hotkeyButton.textContent = savedHotkeyDisplay
+  shortcutDisplays.hotkey = snapshot.hotkeyDisplay
+  shortcutDisplays.newChat = snapshot.newChatShortcutDisplay
+  shortcutDisplays.history = snapshot.historyShortcutDisplay
+  for (const field of Object.keys(shortcutButtons) as ShortcutField[]) {
+    shortcutButtons[field].textContent = shortcutDisplays[field] || '—'
+  }
 
   resetSelect.replaceChildren(
     ...RESET_CHOICES.map((minutes) => {

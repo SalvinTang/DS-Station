@@ -19,6 +19,10 @@ export interface WindowState {
 export interface QuickWindowSettings {
   /** Electron accelerator，例如 'Alt+Space' */
   hotkey: string
+  /** 快捷窗口激活且处于有内容态时，新对话的本地快捷键 */
+  newChatShortcut: string
+  /** 快捷窗口激活时，打开/关闭历史对话的本地快捷键 */
+  historyShortcut: string
   /**
    * 设计稿「重置为新聊天」：距上次关闭超过该分钟数，就以空白会话开场。
    * 0 表示「从不」—— 永远保留上一次的对话内容。
@@ -59,6 +63,8 @@ const DEFAULTS: Settings = {
   window: { width: 1280, height: 860 },
   quickWindow: {
     hotkey: 'Alt+Space',
+    newChatShortcut: 'Command+N',
+    historyShortcut: 'Command+Y',
     resetAfterMinutes: 10,
     x: null,
     bottom: null,
@@ -125,6 +131,22 @@ export function load(): Settings {
     // 文件不存在或损坏 → 用默认值，不报错
     cache = merge(DEFAULTS, {})
   }
+
+  /*
+   * 旧版本的默认历史快捷键是 ⌘H，会和 macOS 的隐藏应用冲突，
+   * 导致快速开合时整个面板闪动。这里自动迁移到新的默认值 ⌘Y。
+   */
+  if (cache.quickWindow.historyShortcut === 'Command+H') {
+    cache.quickWindow.historyShortcut = 'Command+Y'
+    try {
+      const file = settingsPath()
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, `${JSON.stringify(cache, null, 2)}\n`, 'utf8')
+    } catch {
+      // 写不进去也继续用内存里的 ⌘Y
+    }
+  }
+
   return cache
 }
 

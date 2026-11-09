@@ -52,7 +52,7 @@ const HISTORY_WINDOW_HEIGHT = 230
  * 连续点「历史」时，第二次打开会落在这个窗口期内，不再反复
  * 缩放窗口 / 开关系统阴影 —— 浅色背景下那圈灰边就是闪烁的来源。
  */
-const HISTORY_CLOSE_GRACE_MS = 260
+const HISTORY_CLOSE_GRACE_MS = 600
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
@@ -449,6 +449,11 @@ export class QuickWindow {
   }
 
   // ── 形态切换 ──────────────────────────────────────────────
+
+  /** 当前是否处于有内容的展开态（本地快捷键用） */
+  isContentMode(): boolean {
+    return this.mode === 'content'
+  }
 
   /** 切换空态 ↔ 有内容态 */
   setMode(mode: QuickMode): void {

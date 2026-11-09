@@ -1,4 +1,4 @@
-import { globalShortcut } from 'electron'
+import { globalShortcut, type Input } from 'electron'
 import { DEFAULT_QUICK_HOTKEY } from '../shared/constants'
 
 /**
@@ -35,6 +35,95 @@ export function registerQuickHotkey(accelerator: string, handler: () => void): H
 
 export function unregisterAllHotkeys(): void {
   globalShortcut.unregisterAll()
+}
+
+/** accelerator 的规范化签名，用来判断两个组合是否等价 */
+export function acceleratorSignature(accelerator: string): string {
+  const tokens = accelerator
+    .split('+')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean)
+  const key = (tokens.pop() ?? '').replace(/^return$/, 'enter')
+
+  const modifiers = new Set<string>()
+  for (const token of tokens) {
+    if (['command', 'cmd', 'commandorcontrol', 'cmdorctrl', 'super'].includes(token)) {
+      modifiers.add(process.platform === 'darwin' ? 'command' : 'control')
+    } else if (token === 'control' || token === 'ctrl') {
+      modifiers.add('control')
+    } else if (token === 'alt' || token === 'option') {
+      modifiers.add('alt')
+    } else if (token === 'shift') {
+      modifiers.add('shift')
+    }
+  }
+
+  return `${[...modifiers].sort().join('+')}+${key}`
+}
+
+/** 判断一次键盘输入是否命中 accelerator（只用于快捷窗口内的本地快捷键） */
+export function matchesAccelerator(input: Input, accelerator: string): boolean {
+  if (input.type !== 'keyDown' || input.isAutoRepeat) return false
+
+  const tokens = accelerator
+    .split('+')
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean)
+  const key = tokens.pop() ?? ''
+  if (!key) return false
+
+  const has = (...names: string[]): boolean => names.some((name) => tokens.includes(name))
+  const wantsCommand = has('command', 'cmd', 'commandorcontrol', 'cmdorctrl', 'super')
+  const wantsControl =
+    has('control', 'ctrl') ||
+    (process.platform !== 'darwin' && has('commandorcontrol', 'cmdorctrl'))
+
+  if (!!input.meta !== wantsCommand) return false
+  if (!!input.control !== wantsControl) return false
+  if (!!input.alt !== has('alt', 'option')) return false
+  if (!!input.shift !== has('shift')) return false
+
+  return matchesKey(input, key)
+}
+
+function matchesKey(input: Input, key: string): boolean {
+  const normalized = key.toLowerCase()
+  const code = input.code || ''
+
+  if (/^[a-z]$/.test(normalized) && code === `Key${normalized.toUpperCase()}`) return true
+  if (/^[0-9]$/.test(normalized) && code === `Digit${normalized}`) return true
+  if (/^f\d{1,2}$/.test(normalized) && code.toLowerCase() === normalized) return true
+
+  const codeAliases: Record<string, string> = {
+    return: 'Enter',
+    enter: 'Enter',
+    up: 'ArrowUp',
+    down: 'ArrowDown',
+    left: 'ArrowLeft',
+    right: 'ArrowRight',
+    space: 'Space',
+    tab: 'Tab',
+    escape: 'Escape',
+    esc: 'Escape',
+    backspace: 'Backspace',
+    delete: 'Delete',
+    '-': 'Minus',
+    '=': 'Equal',
+    '[': 'BracketLeft',
+    ']': 'BracketRight',
+    ';': 'Semicolon',
+    "'": 'Quote',
+    '`': 'Backquote',
+    '\\': 'Backslash',
+    ',': 'Comma',
+    '.': 'Period',
+    '/': 'Slash',
+  }
+
+  const expectedCode = codeAliases[normalized]
+  if (expectedCode && code === expectedCode) return true
+
+  return (input.key || '').toLowerCase() === normalized
 }
 
 /**
