@@ -1,7 +1,13 @@
 import type { WebContentsView } from 'electron'
 import { DEEPSEEK_ORIGIN } from '../../shared/constants'
-import type { HistoryEntry, HistoryMessage } from '../../shared/types'
-import { SELECTOR_KEYS, pagePrelude, type SelectorKey } from './selectors'
+import type { HistoryEntry, HistoryMessage, SearchInfo, SearchSummary } from '../../shared/types'
+import {
+  COMPOSER_TOGGLES,
+  SELECTOR_KEYS,
+  pagePrelude,
+  type ComposerToggleKey,
+  type SelectorKey,
+} from './selectors'
 
 /**
  * 驱动主窗口里那个 DeepSeek 网页：写文字、点按钮、读回答、读历史。
@@ -322,26 +328,83 @@ export class DeepSeekPage {
 
   /**
    * 把某个开关设成目标状态。
-   * 读不准状态时**不动它** —— 瞎点一下会把用户原来的设置弄反。
+   *
+   * ★ 点击之后**会重新读一遍状态**。
+   *   旧实现只看「点到了元素」就当成功，页面正在切会话、重渲染，
+   *   或者开关禁用时点击其实不生效，用户就会看到「开关是开的，
+   *   DeepSeek 却没联网搜索」。现在最多重试 3 次，每次点击后等状态
+   *   真正变成目标值；确认不了返回 false，调用方只记录日志，
+   *   不因此阻断发送（面板仍然是唯一状态源）。
    */
   async setSwitch(key: 'deepThinkToggle' | 'smartSearchToggle', on: boolean): Promise<boolean> {
-    const states = await this.getSwitchStates()
-    if (!states) return false
+    const read = async (): Promise<boolean | null | undefined> => {
+      const states = await this.getSwitchStates()
+      if (!states) return undefined
+      return key === 'deepThinkToggle' ? states.deepThink : states.smartSearch
+    }
 
-    const current = key === 'deepThinkToggle' ? states.deepThink : states.smartSearch
-    if (current === null) return false
-    if (current === on) return true
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await read()
+      if (current === on) return true
 
-    const clicked =
-      (await this.run<boolean>(`
-        const el = dsFind('${key}');
-        if (!el) return false;
-        el.click();
-        return true;
-      `)) === true
+      // 读不到（页面脚本失败）或元素不存在（页面还没渲染好 /
+      // 当前模型不支持）—— 再等一轮，可能只是新对话后的重渲染。
+      if (current === undefined || current === null) {
+        if (attempt < 2) await delay(350)
+        continue
+      }
 
-    if (clicked) await delay(POLL_INTERVAL)
-    return clicked
+      // 第一次点根节点；没反应时再点图标（结构定位，不依赖文字）。
+      // 点击子元素会冒泡到根节点上的处理函数。
+      const target =
+        attempt === 0 ? 'el' : "(el.querySelector('.ds-toggle-button__icon') || el)"
+      const clicked =
+        (await this.run<boolean>(`
+          const el = dsFind('${key}');
+          if (!el) return false;
+          if (String(el.className || '').includes(DS_STATE.toggleDisabled)) return false;
+          ${target}.click();
+          return true;
+        `)) === true
+
+      if (!clicked) {
+        await delay(300)
+        continue
+      }
+
+      // 等 React 把 aria-pressed / 选中类名更新过来
+      for (let wait = 0; wait < 12; wait += 1) {
+        await delay(100)
+        if ((await read()) === on) return true
+      }
+    }
+
+    const final = await read()
+    console.warn(
+      `[DeepSeek] 开关 ${key} → ${on ? '开' : '关'} 失败，当前状态: ${String(final)}`,
+    )
+    return false
+  }
+
+  /**
+   * 发送前把输入区的开关同步成快捷面板的状态。
+   *
+   * 面板是唯一状态源；网页上用户自己改过的状态在这里被覆盖。
+   * 同步失败不阻断发送 —— 只记录日志，消息照常发出。
+   * 开关的对应关系由 COMPOSER_TOGGLES 的顺序决定，不按文字匹配。
+   */
+  async syncComposerSwitches(desired: {
+    deepThink: boolean
+    smartSearch: boolean
+  }): Promise<void> {
+    const values: Record<ComposerToggleKey, boolean> = {
+      deepThinkToggle: desired.deepThink,
+      smartSearchToggle: desired.smartSearch,
+    }
+
+    for (const key of COMPOSER_TOGGLES) {
+      await this.setSwitch(key, values[key])
+    }
   }
 
   // ── 读 ────────────────────────────────────────────────────────
@@ -463,6 +526,142 @@ export class DeepSeekPage {
     }
 
     return sawAnything
+  }
+
+  /**
+   * 当前实时回答的搜索入口摘要（数量 + 前 4 个网站图标）。
+   * 只读 DOM，回答一开始就能拿到，用来先把顶部搜索气泡显示出来。
+   */
+  async readCurrentSearchSummary(answerIndex?: number): Promise<SearchSummary | null> {
+    return this.run<SearchSummary | null>(`
+      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
+      const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
+      const answer = index === null ? answers[answers.length - 1] : answers[index];
+      if (!answer) return null;
+
+      // 只看当前这条回答所在的消息容器，避免把上一条回答的搜索入口算进来
+      const messageRoot =
+        answer.closest('.ds-message') ||
+        answer.closest('[data-virtual-list-item-key]') ||
+        answer.parentElement;
+      if (!messageRoot) return null;
+
+      let hit = null;
+      let count = null;
+      for (const el of Array.from(messageRoot.querySelectorAll('span, div'))) {
+        if (el.children.length > 0) continue;
+        const text = (el.textContent || '').trim();
+        const match = text.match(/^搜索到\\s*(\\d+)\\s*个网页$/);
+        if (match) {
+          hit = el;
+          count = Number(match[1]);
+          break;
+        }
+      }
+      if (!hit || count === null) return null;
+
+      const icons = [];
+      let row = hit.parentElement;
+      for (let depth = 0; depth < 4 && row; depth += 1) {
+        for (const img of Array.from(row.querySelectorAll('img'))) {
+          const src = img.getAttribute('src') || '';
+          if (/^https:\\/\\/cdn\\.deepseek\\.com\\//i.test(src) && !icons.includes(src)) {
+            icons.push(src);
+          }
+        }
+        if (icons.length > 0) break;
+        row = row.parentElement;
+      }
+      return { count: count, icons: icons.slice(0, 4) };
+    `)
+  }
+
+  /**
+   * 当前这条实时回答的智能搜索结果。
+   *
+   * 页面上的搜索入口在回答正文外层，这里只拿它做“是否搜索过”和数量校验；
+   * 网页列表本身从 history_messages 的 SEARCH 片段里取，和网页端一致。
+   */
+  async readCurrentSearchInfo(answerIndex?: number): Promise<SearchInfo | null> {
+    await this.installApiHeaderHook()
+
+    const result = await this.run<{
+      search?: SearchInfo | null
+      error?: string
+      noSearch?: boolean
+    }>(`
+      return (async () => {
+        try {
+          const headers = window.__dsApiHeaders || null;
+          if (!headers) return { error: 'no headers' };
+          const pathMatch = location.pathname.match(/\\/a\\/chat\\/s\\/([^/?#]+)/);
+          if (!pathMatch) return { noSearch: true };
+          const sessionId = decodeURIComponent(pathMatch[1]);
+
+          const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
+          const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
+          const answer = index === null ? answers[answers.length - 1] : answers[index];
+          if (!answer) return { noSearch: true };
+
+          // 只看当前这条回答所在的消息容器，避免误用上一条回答的搜索结果
+          const messageRoot =
+            answer.closest('.ds-message') ||
+            answer.closest('[data-virtual-list-item-key]') ||
+            answer.parentElement;
+          let summaryCount = null;
+          if (messageRoot) {
+            for (const el of Array.from(messageRoot.querySelectorAll('span, div'))) {
+              if (el.children.length > 0) continue;
+              const text = (el.textContent || '').trim();
+              const hit = text.match(/^搜索到\\s*(\\d+)\\s*个网页$/);
+              if (hit) {
+                summaryCount = Number(hit[1]);
+                break;
+              }
+            }
+          }
+          if (summaryCount === null) return { noSearch: true };
+
+          const url = '/api/v0/chat/history_messages?chat_session_id=' + encodeURIComponent(sessionId);
+          const resp = await fetch(url, { credentials: 'include', headers });
+          if (!resp.ok) return { error: 'http ' + resp.status };
+          const json = await resp.json();
+          if (json && json.code === 40003) return { error: 'invalid token' };
+          const biz = json && json.data && json.data.biz_data;
+          const messages = (biz && biz.chat_messages) || [];
+
+          // 从最后一条往前找，数量和页面上显示的一致才算当前回答
+          for (let i = messages.length - 1; i >= 0; i -= 1) {
+            const message = messages[i];
+            if (!message || message.role === 'USER') continue;
+            const fragment = (message.fragments || []).find((f) => f.type === 'SEARCH');
+            if (!fragment || !Array.isArray(fragment.results)) continue;
+            const sources = fragment.results
+              .filter((item) => item && typeof item.url === 'string' && /^https?:\\/\\//i.test(item.url))
+              .map((item) => ({
+                url: item.url,
+                title: typeof item.title === 'string' ? item.title : '',
+                snippet: typeof item.snippet === 'string' ? item.snippet : '',
+                citeIndex: Number(item.cite_index) || 0,
+                publishedAt: Number(item.published_at) || 0,
+                siteIcon: typeof item.site_icon === 'string' ? item.site_icon : '',
+                siteName: typeof item.site_name === 'string' ? item.site_name : '',
+              }))
+              .sort((a, b) => a.citeIndex - b.citeIndex);
+            if (!sources.length) continue;
+            if (sources.length === summaryCount) {
+              return { search: { count: sources.length, sources: sources } };
+            }
+          }
+          return { noSearch: true };
+        } catch (error) {
+          return { error: String(error && error.message ? error.message : error) };
+        }
+      })();
+    `)
+
+    if (result?.error) console.log('[搜索] 读取当前回答的网页结果失败:', result.error)
+    return result?.search ?? null
   }
 
   // ── 历史对话 ──────────────────────────────────────────────────
@@ -825,7 +1024,33 @@ export class DeepSeekPage {
                   .join(String.fromCharCode(10, 10))
                   .trim();
                 if (!response) continue;
-                out.push({ role: 'ai', text: response, markdown: response, key: String(message.message_id) });
+
+                // 智能搜索：SEARCH 片段里带完整的网页结果
+                const searchFragment = fragments.find((fragment) => fragment.type === 'SEARCH');
+                let search = null;
+                if (searchFragment && Array.isArray(searchFragment.results)) {
+                  const sources = searchFragment.results
+                    .filter((item) => item && typeof item.url === 'string' && /^https?:\\/\\//i.test(item.url))
+                    .map((item) => ({
+                      url: item.url,
+                      title: typeof item.title === 'string' ? item.title : '',
+                      snippet: typeof item.snippet === 'string' ? item.snippet : '',
+                      citeIndex: Number(item.cite_index) || 0,
+                      publishedAt: Number(item.published_at) || 0,
+                      siteIcon: typeof item.site_icon === 'string' ? item.site_icon : '',
+                      siteName: typeof item.site_name === 'string' ? item.site_name : '',
+                    }))
+                    .sort((a, b) => a.citeIndex - b.citeIndex);
+                  if (sources.length) search = { count: sources.length, sources: sources };
+                }
+
+                out.push({
+                  role: 'ai',
+                  text: response,
+                  markdown: response,
+                  key: String(message.message_id),
+                  search: search || undefined,
+                });
               }
               return { messages: out };
             } catch (error) {

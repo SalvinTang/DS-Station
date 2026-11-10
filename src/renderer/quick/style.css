@@ -177,8 +177,12 @@ body {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--frame-border);
-  /* 形态切换时底色和圆角平滑过渡，配合窗口展开动画 */
-  transition: background-color 0.26s ease, border-radius 0.26s ease;
+  /*
+   * 只过渡底色。
+   * 圆角不做过渡：展开/收起搜索结果栏时，右上、右下要立刻变成直角，
+   * 不能看到圆角慢慢收进去的动画。
+   */
+  transition: background-color 0.26s ease;
 }
 
 /*
@@ -858,6 +862,15 @@ body {
   margin-left: -2px;
 }
 
+/*
+ * 回答还在生成时不显示下方操作行（复制按钮 / 搜索胶囊）。
+ * 回答结束或被手动停止后移除 .is-streaming，操作行才出现。
+ * 整行一起隐藏，避免生成过程中底部空出 20px 的按钮位置。
+ */
+.msg-group-ai.is-streaming .msg-actions {
+  display: none;
+}
+
 /* 「继续生成」和复制按钮在同一行：复制在左，继续在右 */
 .msg-actions.has-continue {
   justify-content: space-between;
@@ -1330,3 +1343,280 @@ body {
  * 不占内容宽度，默认自动隐藏，滚动或悬停时出现。
  */
 
+
+/* ── 智能搜索：顶部入口 / 底部胶囊 / 右侧结果栏 ─────────────── */
+
+.shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.shell .app {
+  /* 宽度由 JS 固定成左侧内容宽度：搜索栏展开/收起时内容不跟着拉伸 */
+  flex: none;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 搜索栏展开时：左侧保留左圆角，右侧交给结果栏 */
+.shell.search-open .topbar {
+  border-top-right-radius: 0;
+}
+
+.shell.search-open .app {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-width: 0;
+}
+
+.search-panel {
+  flex: none;
+  width: 260px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--frame-border);
+  border-left: 1px solid var(--history-border);
+  border-radius: 0 30px 30px 0;
+  background: var(--history-bg);
+}
+
+.search-panel[hidden] {
+  display: none;
+}
+
+.search-panel-head {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--history-border);
+}
+
+.search-panel-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.search-panel-close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #ababab;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.search-panel-close svg {
+  transform: rotate(90deg);
+}
+
+.search-panel-close:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.search-loading {
+  padding: 24px 12px;
+  color: var(--placeholder);
+  font-size: 12px;
+  text-align: center;
+}
+
+.search-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+}
+
+.search-result {
+  display: block;
+  padding: 10px 9px;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.14s ease;
+}
+
+.search-result:hover {
+  background: var(--hover-bg);
+}
+
+.search-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--placeholder);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+
+.search-result-meta .site-logo {
+  flex: none;
+  /* 搜索结果栏里的 logo 比气泡里的略大：14 + 2 = 16 */
+  width: 16px;
+  height: 16px;
+  margin-left: 0;
+  border-color: var(--history-bg);
+}
+
+.search-result-site {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-date {
+  flex: none;
+}
+
+.search-result-cite {
+  flex: none;
+  min-width: 14px;
+  height: 14px;
+  margin-left: auto;
+  padding: 0 4px;
+  border-radius: 6px 6px 6px 0;
+  background: var(--cite-bg);
+  color: var(--cite-fg);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.search-result-title {
+  display: -webkit-box;
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.search-result-snippet {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--placeholder);
+  font-size: 11px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 回答顶部的搜索入口 */
+.search-top {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin: 0 0 10px;
+  padding: 3px 4px 3px 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--placeholder);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.search-top:hover {
+  background: var(--hover-bg);
+}
+
+
+.search-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  color: var(--placeholder);
+}
+
+.search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.site-logos {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 0;
+}
+
+.site-logo:first-child {
+  margin-left: 0;
+}
+
+.site-logo {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin-left: -5px;
+  overflow: hidden;
+  border: 1.5px solid var(--frame-content);
+  border-radius: 50%;
+  background: var(--cite-bg);
+  color: var(--cite-fg);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
+.site-logo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 回答底部、和复制按钮同一排的搜索胶囊 */
+.search-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin-left: auto;
+  padding: 2px 8px 2px 5px;
+  border: 1px solid var(--tool-border);
+  border-radius: 12px;
+  background: var(--tool-bg);
+  color: var(--placeholder);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.search-pill:hover {
+  background: var(--hover-bg);
+}
+
+.search-pill .site-logo {
+  border-color: var(--tool-bg);
+}

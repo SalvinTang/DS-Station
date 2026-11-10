@@ -47,6 +47,9 @@ const SIZE_SAVE_DELAY = 400
 /** 空态打开历史弹框时，窗口向上让出的高度（输入框 100 + 气泡主体 166 + 尾巴和间隙） */
 const HISTORY_WINDOW_HEIGHT = 230
 
+/** 智能搜索结果栏宽度：展开时窗口在内容宽度基础上加这么多 */
+const SEARCH_PANEL_WIDTH = 260
+
 /**
  * 关掉历史弹框后，窗口保持撑高状态一小会儿再还原。
  * 连续点「历史」时，第二次打开会落在这个窗口期内，不再反复
@@ -84,6 +87,8 @@ export class QuickWindow {
   private historyRestoreHeight = QUICK_WINDOW_MIN_HEIGHT
   /** 关闭弹框后延迟还原窗口的定时器 */
   private historyCloseTimer: NodeJS.Timeout | null = null
+  /** 智能搜索结果栏是否展开（只影响有内容态宽度） */
+  private searchPanelOpen = false
 
   /** 有内容态的尺寸，跨隐藏/重启保留 */
   private contentSize = {
@@ -455,6 +460,51 @@ export class QuickWindow {
     return this.mode === 'content'
   }
 
+  /** 搜索结果栏展开/收起：窗口加宽/收窄，内容宽度保持不变 */
+  setSearchPanel(open: boolean): void {
+    if (this.mode !== 'content') return
+
+    const bounds = this.window.getBounds()
+    const currentExtra = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+    const currentContentWidth = Math.max(
+      QUICK_WINDOW_CONTENT_MIN_WIDTH,
+      bounds.width - currentExtra,
+    )
+    this.contentSize = { width: currentContentWidth, height: bounds.height }
+
+    if (this.searchPanelOpen === open) return
+    this.searchPanelOpen = open
+
+    if (!this.visible) return
+
+    const display = screen.getDisplayNearestPoint({
+      x: Math.round(bounds.x + bounds.width / 2),
+      y: Math.round(bounds.y + bounds.height / 2),
+    })
+    const area = display.workArea
+    const targetWidth = currentContentWidth + (open ? SEARCH_PANEL_WIDTH : 0)
+
+    let x = bounds.x
+    if (x + targetWidth > area.x + area.width - EDGE_MARGIN) {
+      x = area.x + area.width - targetWidth - EDGE_MARGIN
+    }
+    x = Math.max(area.x, Math.round(x))
+
+    // 先改最小宽度再改 bounds：否则关闭搜索栏时 420 会被旧的 680 最小值夹回去
+    this.window.setMinimumSize(
+      QUICK_WINDOW_CONTENT_MIN_WIDTH + (open ? SEARCH_PANEL_WIDTH : 0),
+      QUICK_WINDOW_CONTENT_MIN_HEIGHT,
+    )
+    this.window.setBounds({
+      x,
+      y: bounds.y,
+      width: Math.round(targetWidth),
+      height: bounds.height,
+    })
+    this.bottomY = bounds.y + bounds.height
+    this.persistBounds()
+  }
+
   /** 切换空态 ↔ 有内容态 */
   setMode(mode: QuickMode): void {
     if (mode === this.mode) return
@@ -471,6 +521,7 @@ export class QuickWindow {
     }
 
     if (mode === 'content') {
+      if (previous === 'empty') this.searchPanelOpen = false
       const target = this.contentBoundsFromCurrent()
       this.window.setResizable(true)
 
@@ -500,6 +551,7 @@ export class QuickWindow {
 
     // ── 收回空态 ─────────────────────────────────────────────
     this.cancelAnimation()
+    this.searchPanelOpen = false
     this.window.setMinimumSize(0, 0)
     this.window.setResizable(false)
 
@@ -565,7 +617,9 @@ export class QuickWindow {
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const area = display.workArea
 
-    const width = this.mode === 'content' ? this.contentWidthFor(area) : QUICK_WINDOW_WIDTH
+    const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+    const width =
+      this.mode === 'content' ? this.contentWidthFor(area) + panelWidth : QUICK_WINDOW_WIDTH
     const height = this.mode === 'content' ? this.contentHeightFor(area) : this.currentHeight
 
     let x: number
@@ -590,15 +644,25 @@ export class QuickWindow {
       y = Math.round(area.y + (area.height - height) / 2)
     }
 
-    // 窗口不能完全跑出工作区
-    x = clamp(x, area.x - width + 80, area.x + area.width - 80)
+    // 窗口不能完全跑出工作区；有内容态尽量整块留在工作区里
+    if (this.mode === 'content') {
+      x = clamp(x, area.x, Math.max(area.x, area.x + area.width - width))
+    } else {
+      x = clamp(x, area.x - width + 80, area.x + area.width - 80)
+    }
     y = clamp(y, area.y, area.y + area.height - 80)
 
     this.bottomY = y + height
-    this.window.setBounds({ x: Math.round(x), y: Math.round(y), width, height })
+    // 先设置最小尺寸，再落 bounds：否则从「搜索栏展开」的窄状态恢复时会被旧最小值夹住
     if (this.mode === 'content') {
-      this.window.setMinimumSize(QUICK_WINDOW_CONTENT_MIN_WIDTH, QUICK_WINDOW_CONTENT_MIN_HEIGHT)
+      this.window.setMinimumSize(
+        QUICK_WINDOW_CONTENT_MIN_WIDTH + panelWidth,
+        QUICK_WINDOW_CONTENT_MIN_HEIGHT,
+      )
+    } else {
+      this.window.setMinimumSize(0, 0)
     }
+    this.window.setBounds({ x: Math.round(x), y: Math.round(y), width, height })
   }
 
   /**
@@ -811,8 +875,11 @@ export class QuickWindow {
     }
     if (this.mode === 'content') {
       // 同步内存里的尺寸：用户缩放后马上收起时，防抖可能还没跑完
-      this.contentSize = { width: bounds.width, height: bounds.height }
-      patch.contentWidth = bounds.width
+      // 搜索栏的宽度不属于内容宽度，保存时要扣掉
+      const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+      const contentWidth = Math.max(QUICK_WINDOW_CONTENT_MIN_WIDTH, bounds.width - panelWidth)
+      this.contentSize = { width: contentWidth, height: bounds.height }
+      patch.contentWidth = contentWidth
       patch.contentHeight = bounds.height
     }
     save({ quickWindow: patch })
@@ -827,12 +894,14 @@ export class QuickWindow {
       if (this.mode !== 'content' || !this.visible) return
 
       const bounds = this.window.getBounds()
-      this.contentSize = { width: bounds.width, height: bounds.height }
+      const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+      const contentWidth = Math.max(QUICK_WINDOW_CONTENT_MIN_WIDTH, bounds.width - panelWidth)
+      this.contentSize = { width: contentWidth, height: bounds.height }
       save({
         quickWindow: {
           x: bounds.x,
           bottom: bounds.y + bounds.height,
-          contentWidth: bounds.width,
+          contentWidth,
           contentHeight: bounds.height,
         },
       })

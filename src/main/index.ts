@@ -345,6 +345,11 @@ if (!app.requestSingleInstanceLock()) {
       runLocalShortcutSelfCheck(quickWindow)
     }
 
+    // 智能搜索自检：历史对话里的搜索入口、右侧结果栏、实时搜索数据
+    if (process.env.DS_SEARCH_TEST === '1') {
+      runSearchSelfCheck(mainWindow, quickWindow)
+    }
+
     // 接口 Markdown 渲染自检
     if (process.env.DS_API_MD_TEST === '1') {
       runApiMarkdownSelfCheck(quickWindow)
@@ -475,6 +480,10 @@ function registerIpcHandlers(): void {
 
   ipcMain.on('ds:quick-mode', (_event, mode: QuickMode) => {
     if (mode === 'empty' || mode === 'content') quickWindow?.setMode(mode)
+  })
+
+  ipcMain.on('ds:quick-search-panel', (_event, open: unknown) => {
+    quickWindow?.setSearchPanel(open === true)
   })
 
   ipcMain.on('ds:quick-new-chat', () => void startNewChatOnPage())
@@ -667,6 +676,7 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
   const page = new DeepSeekPage(win.pageView)
   const token: StreamToken = { cancelled: false }
   activeToken = token
+  const viewEpoch = ++quickViewEpoch
 
   try {
     /*
@@ -688,9 +698,6 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
       await delay(300)
     }
 
-    await page.setSwitch('deepThinkToggle', payload.deepThink)
-    await page.setSwitch('smartSearchToggle', payload.smartSearch)
-
     let typed = false
     for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
       typed = await page.setComposerText(payload.text)
@@ -706,11 +713,60 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     const baseline = await page.listAnswers()
     console.log(`[快捷窗口] 发送前已有 ${baseline.length} 条回答`)
 
+    /*
+     * 以快捷面板为准：只在真正发送前同步网页开关。
+     * 面板上反复点击不会碰网页；网页上用户自己改过的状态在这里覆盖。
+     * 同步失败不阻断发送（用户要求不因同步结果影响发送）。
+     */
+    await page.syncComposerSwitches({
+      deepThink: payload.deepThink,
+      smartSearch: payload.smartSearch,
+    })
+
     if (!(await page.clickSend())) {
       throw new Error('没找到发送按钮')
     }
 
     quick.sendEvent({ type: 'answer-start' })
+
+    /*
+     * 搜索摘要优先：一发现新回答的搜索入口就立刻推给快捷窗口，
+     * 只带数量和网站图标，让顶部气泡先出现；完整网页列表在后台拉。
+     * 回答正文不等待搜索，页面一开始输出就跟着流式显示。
+     */
+    let summarySent = false
+    let stopSummaryWatch = false
+    const summaryWatcher = payload.smartSearch
+      ? (async () => {
+          while (
+            !stopSummaryWatch &&
+            !token.cancelled &&
+            viewEpoch === quickViewEpoch &&
+            !summarySent
+          ) {
+            const summary = await page.readCurrentSearchSummary(baseline.length)
+            if (summary) {
+              summarySent = true
+              quick.sendEvent({ type: 'answer-search-summary', summary })
+
+              // 完整网页列表后台加载，不阻塞回答正文
+              void (async () => {
+                for (let attempt = 0; attempt < 6; attempt += 1) {
+                  if (token.cancelled || viewEpoch !== quickViewEpoch) return
+                  const info = await page.readCurrentSearchInfo(baseline.length)
+                  if (info) {
+                    quick.sendEvent({ type: 'answer-search', search: info })
+                    return
+                  }
+                  await delay(400)
+                }
+              })()
+              return
+            }
+            await delay(180)
+          }
+        })()
+      : Promise.resolve()
 
     const appeared = await page.waitForAnswerChange(baseline, 45000, token)
     if (token.cancelled) return
@@ -723,6 +779,9 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
       120000,
       token,
     )
+
+    stopSummaryWatch = true
+    await summaryWatcher
 
     if (token.cancelled) return
     if (!got) throw new Error('没有读到回答')
@@ -870,6 +929,8 @@ let historyListEpoch = 0
 let activeHistoryId: string | null = null
 /** 历史选择请求序号：连续点击时只让最后一次生效 */
 let historySelectEpoch = 0
+/** 快捷窗口当前视图世代：新提问 / 切历史 / 新对话时递增，旧的异步搜索数据直接丢弃 */
+let quickViewEpoch = 0
 
 /** 把接口列表里下一段（30 条）推给快捷窗口 */
 function sendApiHistoryChunk(quick: QuickWindow): void {
@@ -1049,6 +1110,7 @@ async function handleHistorySelect(id: string): Promise<void> {
   if (activeToken) return
 
   const epoch = ++historySelectEpoch
+  quickViewEpoch += 1
   activeHistoryId = null
   historyPanelOpen = false
   historyListEpoch += 1
@@ -1156,6 +1218,7 @@ async function startNewChatOnPage(): Promise<void> {
   const win = mainWindow
   if (!win) return
 
+  quickViewEpoch += 1
   activeHistoryId = null
 
   // 如果上一轮还在生成，先让它停下来，避免旧轮询继续读新会话
@@ -1881,6 +1944,203 @@ function runScrollSelfCheck(quick: QuickWindow | null): void {
 }
 
 /** 历史对话功能自检：打开弹框 → 读列表 → 选第一条 → 检查快捷窗口内容 */
+/** 自检：智能搜索结果入口、右侧结果栏和实时搜索数据 */
+function runSearchSelfCheck(win: MainWindow | null, quick: QuickWindow | null): void {
+  if (!win || !quick) return
+  const run = <T>(js: string): Promise<T> => quick.window.webContents.executeJavaScript(js)
+
+  setTimeout(() => quick.show(), 800)
+  setTimeout(async () => {
+    await run(`document.getElementById('history').click(); true`)
+
+    let targetId = ''
+    for (let i = 0; i < 40; i += 1) {
+      targetId = await run<string>(`(() => {
+        const item = [...document.querySelectorAll('.history-item')]
+          .find((el) => (el.textContent || '').includes('Mac本地音乐播放器推荐'));
+        return item ? item.dataset.id || '' : '';
+      })()`)
+      if (targetId) break
+      await run(`(() => { const list = document.getElementById('historyList'); if (list) list.scrollTop = list.scrollHeight; return true })()`)
+      await delay(500)
+    }
+    console.log('[搜索测试] 目标会话:', targetId)
+    if (!targetId) {
+      process.exit(0)
+    }
+
+    await run(`(() => {
+      const item = [...document.querySelectorAll('.history-item')]
+        .find((el) => (el.textContent || '').includes('Mac本地音乐播放器推荐'));
+      item?.click();
+      return true;
+    })()`)
+
+    for (let i = 0; i < 30; i += 1) {
+      if (await run<boolean>(`!!document.querySelector('.search-top')`)) break
+      await delay(500)
+    }
+
+    const ui = await run<Record<string, unknown>>(`(() => ({
+      topCount: document.querySelectorAll('.search-top').length,
+      topText: document.querySelector('.search-top')?.innerText,
+      pillCount: document.querySelectorAll('.search-pill').length,
+      logoImages: document.querySelectorAll('.search-top .site-logo img').length,
+      panelHidden: document.getElementById('searchPanel').hidden,
+      size: [innerWidth, innerHeight],
+    }))()`)
+    const pillRect = (): Promise<unknown> =>
+      run(`(() => { const el = document.querySelector('.search-pill'); if (!el) return null; const r = el.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.width)] })()`)
+    console.log(
+      '[搜索测试] UI:',
+      JSON.stringify(ui),
+      'window:',
+      JSON.stringify(quick.window.getBounds()),
+      'pill:',
+      JSON.stringify(await pillRect()),
+    )
+    writeFileSync('/tmp/ds-search-ui.png', (await quick.window.webContents.capturePage()).toPNG())
+
+    await run(`document.querySelector('.search-top')?.click(); true`)
+    await delay(700)
+    const opened = await run<Record<string, unknown>>(`(() => ({
+      shellOpen: document.getElementById('shell').classList.contains('search-open'),
+      panelHidden: document.getElementById('searchPanel').hidden,
+      items: document.querySelectorAll('.search-result').length,
+      first: document.querySelector('.search-result')?.innerText.slice(0, 120),
+      size: [innerWidth, innerHeight],
+    }))()`)
+    console.log(
+      '[搜索测试] 展开:',
+      JSON.stringify(opened),
+      'window:',
+      JSON.stringify(quick.window.getBounds()),
+      'pill:',
+      JSON.stringify(await pillRect()),
+    )
+    writeFileSync('/tmp/ds-search-open.png', (await quick.window.webContents.capturePage()).toPNG())
+
+    quick.hide()
+    await delay(500)
+    quick.show()
+    await delay(800)
+    const reopened = await run(`({
+      shellOpen: document.getElementById('shell').classList.contains('search-open'),
+      panelHidden: document.getElementById('searchPanel').hidden,
+      items: document.querySelectorAll('.search-result').length,
+    })`)
+    console.log('[搜索测试] 隐藏后重开:', JSON.stringify(reopened), 'window:', JSON.stringify(quick.window.getBounds()))
+
+    await run(`document.getElementById('searchPanelClose')?.click(); true`)
+    await delay(600)
+    console.log(
+      '[搜索测试] 收起:',
+      JSON.stringify(
+        await run(`({
+          shellOpen: document.getElementById('shell').classList.contains('search-open'),
+          panelHidden: document.getElementById('searchPanel').hidden,
+          size: [innerWidth, innerHeight],
+        })`),
+      ),
+      'window:',
+      JSON.stringify(quick.window.getBounds()),
+      'pill:',
+      JSON.stringify(await pillRect()),
+    )
+
+    const page = new DeepSeekPage(win.pageView)
+    const switched = await page.switchToHistory(targetId)
+    await delay(800)
+    const liveSearch = await page.readCurrentSearchInfo()
+    console.log(
+      '[搜索测试] 实时数据:',
+      JSON.stringify({
+        switched,
+        count: liveSearch?.count ?? null,
+        first: liveSearch?.sources[0]?.title ?? null,
+        cite: liveSearch?.sources[0]?.citeIndex ?? null,
+      }),
+    )
+
+    if (liveSearch) {
+      // 模拟实时回答：摘要先到 → 正文 → 完整详情 → 回答结束
+      quick.sendEvent({ type: 'answer-start' })
+      quick.sendEvent({
+        type: 'answer-search-summary',
+        summary: {
+          count: liveSearch.count,
+          icons: liveSearch.sources.slice(0, 4).map((source) => source.siteIcon),
+        },
+      })
+      await delay(400)
+
+      const summaryState = await run<Record<string, unknown>>(`(() => {
+        const groups = [...document.querySelectorAll('.msg-group-ai')];
+        const group = groups[groups.length - 1];
+        return {
+          top: group?.querySelector('.search-top')?.innerText ?? null,
+          pill: !!group?.querySelector('.search-pill'),
+          bodyLength: (group?.querySelector('.body')?.innerText || '').length,
+        };
+      })()`)
+      console.log('[搜索测试] 摘要阶段:', JSON.stringify(summaryState))
+
+      quick.sendEvent({
+        type: 'answer-update',
+        text: '测试回答内容',
+        html: '<p>测试回答内容</p>',
+      })
+      await delay(500)
+      quick.sendEvent({ type: 'answer-search', search: liveSearch })
+      await delay(400)
+
+      const afterText = await run<Record<string, unknown>>(`(() => {
+        const groups = [...document.querySelectorAll('.msg-group-ai')];
+        const group = groups[groups.length - 1];
+        return {
+          top: group?.querySelector('.search-top')?.innerText ?? null,
+          pill: !!group?.querySelector('.search-pill'),
+          body: group?.querySelector('.body')?.innerText ?? null,
+        };
+      })()`)
+      console.log('[搜索测试] 摘要+正文+详情:', JSON.stringify(afterText))
+
+      await run(`(() => {
+        const groups = [...document.querySelectorAll('.msg-group-ai')];
+        groups[groups.length - 1]?.querySelector('.search-top')?.click();
+        return true;
+      })()`)
+      await delay(500)
+      console.log(
+        '[搜索测试] 实时搜索面板:',
+        JSON.stringify(
+          await run(`({
+            open: document.getElementById('shell').classList.contains('search-open'),
+            items: document.querySelectorAll('.search-result').length,
+          })`),
+        ),
+        'window:',
+        JSON.stringify(quick.window.getBounds()),
+      )
+      await run(`document.getElementById('searchPanelClose')?.click(); true`)
+      quick.sendEvent({ type: 'answer-done' })
+      await delay(400)
+      console.log(
+        '[搜索测试] 回答结束后底部胶囊:',
+        JSON.stringify(
+          await run(`(() => {
+            const groups = [...document.querySelectorAll('.msg-group-ai')];
+            const group = groups[groups.length - 1];
+            return { pill: !!group?.querySelector('.search-pill'), text: group?.querySelector('.search-pill')?.innerText ?? null };
+          })()`),
+        ),
+      )
+    }
+
+    process.exit(0)
+  }, 1200)
+}
+
 /** 自检：快捷窗口内的本地快捷键（⌘H / ⌘N） */
 function runLocalShortcutSelfCheck(quick: QuickWindow | null): void {
   if (!quick) return

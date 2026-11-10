@@ -22,6 +22,10 @@
  *
  *  4. 回答正文里会内联引用角标 `<span class="ds-markdown-cite">`，
  *     读纯文本时必须滤掉，否则会读成「……框架。12」。
+ *
+ *  5. 输入区的两个开关**不按文字认**。DeepSeek 固定先渲染「深度思考」，
+ *     再渲染「智能搜索」；按 DOM 顺序取比按文字稳 —— 侧栏历史对话标题、
+ *     设置项里都可能出现同样的词，以后输入区还会加更多开关。
  */
 
 /** 纯 CSS 候选链：按「稳定 → 脆弱」排序，取第一个命中的**可见**元素 */
@@ -41,7 +45,7 @@ export const SELECTORS = {
     'button[type="submit"]',
   ],
 
-  /** 具体是哪一个由文字决定，见 TEXT_MATCHERS */
+  /** 具体是哪一个由 DOM 顺序决定，见 COMPOSER_TOGGLES */
   deepThinkToggle: ['.ds-toggle-button'],
 
   /** 同上 */
@@ -61,21 +65,30 @@ export type SelectorKey = keyof typeof SELECTORS
 export const SELECTOR_KEYS = Object.keys(SELECTORS) as SelectorKey[]
 
 /**
+ * 输入区开关的固定顺序，必须和 DeepSeek 的渲染顺序一致。
+ *
+ * 这是「输入区第几个开关对应哪个功能」的唯一映射表。
+ * 以后快捷面板新增功能时，在这里追加，并保证顺序和网页一致；
+ * 不要改成按文字匹配 —— 同名文字可能出现在侧栏、设置、历史对话里。
+ */
+export const COMPOSER_TOGGLES = ['deepThinkToggle', 'smartSearchToggle'] as const
+export type ComposerToggleKey = (typeof COMPOSER_TOGGLES)[number]
+
+/**
  * 只能靠文字认的元素。
  * 之所以不写成选择器，是因为 DeepSeek 的按钮基本没有 aria-label，
  * 而「哪些元素算按钮」在它这里也不固定（div / span / a 都有）。
+ *
+ * 输入区开关不在此列：它们见 COMPOSER_TOGGLES，按 DOM 顺序取。
  */
 export const TEXT_MATCHERS: Partial<Record<SelectorKey, readonly string[]>> = {
-  deepThinkToggle: ['深度思考'],
-  // 设计稿叫「智能搜索」，DeepSeek 中文界面用的也是这个词；
-  // 英文界面或旧版可能叫「联网搜索」，一并留着
-  smartSearchToggle: ['智能搜索', '联网搜索', '联网'],
-  newChat: ['新对话', '开启新对话', '新建对话'],
+  newChat: ['新对话', '开启新对话', '新建对话', 'New chat'],
 }
 
 /** 表示「开」的状态类名 */
 export const STATE_CLASS = {
   toggleSelected: 'ds-toggle-button--selected',
+  toggleDisabled: 'ds-toggle-button--disabled',
   buttonDisabled: 'ds-button--disabled',
 } as const
 
@@ -97,6 +110,7 @@ export function pagePrelude(): string {
   return `
     const DS_SELECTORS = ${JSON.stringify(SELECTORS)};
     const DS_TEXT_MATCHERS = ${JSON.stringify(TEXT_MATCHERS)};
+    const DS_COMPOSER_TOGGLES = ${JSON.stringify(COMPOSER_TOGGLES)};
     const DS_STATE = ${JSON.stringify(STATE_CLASS)};
     const DS_NOISE = ${JSON.stringify(NOISE_SELECTORS)};
 
@@ -137,8 +151,9 @@ export function pagePrelude(): string {
         return null;
       };
 
+      // 开关不参与文字匹配：它们只按 COMPOSER_TOGGLES 的顺序取。
       return (
-        scan(root.querySelectorAll('.ds-toggle-button, .ds-button, [role="button"], button, a')) ||
+        scan(root.querySelectorAll('.ds-button, [role="button"], button, a')) ||
         scan(root.querySelectorAll('div, span'))
       );
     };
@@ -165,6 +180,58 @@ export function pagePrelude(): string {
     };
 
     /**
+     * 找到开关的真正根节点（带 aria-pressed / --selected 的那一层）。
+     */
+    const dsToggleRoot = (el) => {
+      if (!el) return null;
+      if (String(el.className || '').includes('ds-toggle-button')) return el;
+      let node = el.parentElement;
+      for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
+        if (String(node.className || '').includes('ds-toggle-button')) return node;
+      }
+      return el;
+    };
+
+    /**
+     * 输入区里的开关列表，按 DOM 顺序返回。
+     *
+     * 从输入框往上找「第一个包含 .ds-toggle-button 的祖先容器」，
+     * 这个容器就是输入区的功能行，不会把侧栏历史对话、设置项算进来。
+     */
+    const dsComposerToggleList = () => {
+      const composer = dsPick('composer', false);
+      if (!composer) return [];
+
+      let node = composer;
+      for (let i = 0; i < 10 && node && node !== document.body; i++) {
+        node = node.parentElement;
+        if (!node) break;
+        const list = Array.from(node.querySelectorAll('.ds-toggle-button')).filter(dsVisible);
+        if (list.length) return list;
+      }
+      return [];
+    };
+
+    /**
+     * 按 DOM 顺序取开关。
+     *
+     * ★ 不按文字找。侧栏历史对话标题、设置项里都可能出现「智能搜索」
+     *   之类的文字；以前按文字匹配曾点到侧栏对话，表现就是「有时智能
+     *   搜索没生效」。现在只认输入区里的开关顺序。
+     *
+     * 数量对不上时返回 null：当前模型可能不支持其中某个开关，
+     * 或者 DeepSeek 调了结构。这时宁可不点，也不能把深度思考当搜索点。
+     */
+    const dsFindToggle = (key) => {
+      const index = DS_COMPOSER_TOGGLES.indexOf(key);
+      if (index < 0) return null;
+
+      const list = dsComposerToggleList();
+      if (list.length !== DS_COMPOSER_TOGGLES.length) return null;
+      return list[index] || null;
+    };
+
+    /**
      * 发送按钮：先看输入框周边那个实心圆形按钮，
      * 那儿是唯一会随着输入框状态一起禁用/启用的元素。
      */
@@ -185,6 +252,7 @@ export function pagePrelude(): string {
 
     /** 统一入口：注册表 + 文字匹配 + 特例 */
     const dsFind = (key, requireVisible = true) => {
+      if (key === 'deepThinkToggle' || key === 'smartSearchToggle') return dsFindToggle(key);
       if (DS_TEXT_MATCHERS[key]) return dsFindByText(DS_TEXT_MATCHERS[key]);
       if (key === 'sendButton') return dsFindSend();
       return dsPick(key, requireVisible);
@@ -213,12 +281,13 @@ export function pagePrelude(): string {
 
     /** 元素是否处于「开」的状态 */
     const dsIsOn = (el) => {
-      if (!el) return null;
-      const cls = String(el.className || '');
+      const node = dsToggleRoot(el);
+      if (!node) return null;
+      const cls = String(node.className || '');
       if (cls.includes(DS_STATE.toggleSelected)) return true;
-      const aria = el.getAttribute('aria-checked') ?? el.getAttribute('aria-pressed');
+      const aria = node.getAttribute('aria-checked') ?? node.getAttribute('aria-pressed');
       if (aria !== null) return aria === 'true';
-      const state = el.getAttribute('data-state');
+      const state = node.getAttribute('data-state');
       if (state) return state === 'on' || state === 'checked';
       return false;
     };

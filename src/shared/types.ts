@@ -12,6 +12,31 @@ export interface HistoryEntry {
   title: string
 }
 
+/** 智能搜索的一条网页结果 */
+export interface SearchSource {
+  url: string
+  title: string
+  snippet: string
+  /** 对应回答里的 [citation:N] */
+  citeIndex: number
+  /** Unix 秒 */
+  publishedAt: number
+  siteIcon: string
+  siteName: string
+}
+
+/** 搜索结果摘要：数量 + 前 4 个网站图标，页面 DOM 一出现就能拿到 */
+export interface SearchSummary {
+  count: number
+  icons: string[]
+}
+
+/** 一条 AI 回答附带的搜索结果 */
+export interface SearchInfo {
+  count: number
+  sources: SearchSource[]
+}
+
 /** 历史对话里的消息。AI 消息额外带渲染好的 HTML（快速窗口负责清洗） */
 export interface HistoryMessage {
   role: 'user' | 'ai'
@@ -21,6 +46,8 @@ export interface HistoryMessage {
   markdown?: string
   /** 页面虚拟列表的消息 key，用于继续加载更早的消息 */
   key?: string
+  /** 智能搜索的网页结果 */
+  search?: SearchInfo
 }
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
@@ -29,6 +56,10 @@ export type QuickEvent =
   | { type: 'answer-start' }
   /** 回答增量更新：text 用于纯文本兜底/复制，html 是页面里渲染好的 Markdown */
   | { type: 'answer-update'; text: string; html?: string }
+  /** 搜索结果摘要（先到）：顶部气泡只需要数量和图标 */
+  | { type: 'answer-search-summary'; summary: SearchSummary }
+  /** 完整搜索结果（后到，用于右侧搜索栏） */
+  | { type: 'answer-search'; search: SearchInfo | null }
   /** 回答结束 */
   | { type: 'answer-done' }
   /**
@@ -162,6 +193,9 @@ export interface DsApi {
 
   /** 切换窗口形态：空态 ↔ 有内容 */
   setQuickMode: (mode: QuickMode) => void
+
+  /** 搜索结果栏展开/收起：主进程会相应加宽/收窄窗口 */
+  setSearchPanel: (open: boolean) => void
 
   /** 顶栏「新对话」：清空当前对话 */
   quickNewChat: () => void
