@@ -10,7 +10,8 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <div class="app" id="app" data-mode="empty">
+    <div class="shell" id="shell">
+      <div class="app" id="app" data-mode="empty">
       <!--
         顶部功能栏：鼠标移入才出现，移出 2 秒后隐藏（设计稿）。
         它是**浮在消息区上面**的绝对定位层，不占布局高度 ——
@@ -159,6 +160,23 @@
           </button>
         </div>
       </div>
+      </div>
+
+      <!-- 智能搜索结果栏：展开时窗口右侧加宽 260px -->
+      <aside class="search-panel" id="searchPanel" hidden>
+        <header class="search-panel-head">
+          <h2 id="searchPanelTitle">搜索结果</h2>
+          <button id="searchPanelClose" class="search-panel-close" type="button" title="收起" aria-label="收起">
+            <svg viewBox="0 0 1024 1024" width="20" height="20" fill="none" aria-hidden="true">
+              <path
+                fill="currentColor"
+                d="M516.096 84.65c236.773 0 428.715 191.943 428.715 428.715 0 236.773-191.942 428.715-428.715 428.715-236.773 0-428.715-191.942-428.715-428.715 0-236.772 191.942-428.714 428.715-428.714z m-153.7 342.703c-15.513-15.845-40.923-16.482-57.215-1.264-16.531 15.442-17.414 41.361-1.972 57.893L486.86 680.59l0.674 0.704c16.304 16.66 43.326 16.384 59.276-0.795l182.257-196.303 0.659-0.727c14.701-16.6 13.53-41.99-2.807-57.16l-0.727-0.658c-16.6-14.702-41.99-13.531-57.16 2.806l-152.33 164.07-153.63-164.466z"
+              />
+            </svg>
+          </button>
+        </header>
+        <div class="search-panel-list" id="searchPanelList"></div>
+      </aside>
     </div>
 
     <!-- 复制按钮 / 消息模板 -->

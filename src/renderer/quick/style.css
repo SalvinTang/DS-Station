@@ -23,12 +23,14 @@
 
   --text: #1b1b1f;
   --placeholder: #999999;
+  /* 回答正文 / 用户提问文字 */
+  --answer-fg: #0f1115;
 
-  /* 功能按钮（深度 / 搜索）：未激活 / 已激活 */
+  /* 功能按钮（深度 / 搜索 / 历史）：未激活 / 已激活 */
   --tool-bg: #ffffff;
   --tool-border: #e6e6e6;
-  --tool-fg: #151721;
-  --tool-icon: #0f1114;
+  --tool-fg: #0f1115;
+  --tool-icon: #0f1115;
   --tool-bg-active: #e8f0fe;
   --tool-border-active: #b7c8fe;
   --tool-fg-active: #3964fe;
@@ -51,7 +53,7 @@
 
   /* 亮色：用户气泡浅蓝、深色文字 */
   --user-bubble: #edf3fe;
-  --user-bubble-fg: #1b1b1f;
+  --user-bubble-fg: #0f1115;
 
   /* Markdown */
   --link: #2f6bff;
@@ -71,7 +73,11 @@
   --topbar-bg: #e9e9eb;
   --topbar-fg: #555555;
 
-  --copy-fg: #555555;
+  --copy-fg: #81858c;
+  --think-icon: #81858c;
+  --think-text: #61666b;
+  --think-line: #e1e5ee;
+  --search-pill-bg: #ffffff;
   --hover-bg: rgba(0, 0, 0, 0.06);
   --scrollbar: rgba(0, 0, 0, 0.28);
   /* macOS 风格：近距离薄投影 + 远距离柔和扩散 */
@@ -92,11 +98,12 @@
 
     --text: #ffffff;
     --placeholder: #999999;
+    --answer-fg: #f9fafb;
 
     --tool-bg: #2c2c2e;
     --tool-border: #797979;
-    --tool-fg: #ffffff;
-    --tool-icon: #ffffff;
+    --tool-fg: #f9fafb;
+    --tool-icon: #f9fafb;
     --tool-bg-active: #34415b;
     --tool-border-active: #4868b2;
     --tool-fg-active: #679efe;
@@ -112,8 +119,8 @@
     --history-bg: #1b1b1f;
     --history-border: #3a3a3d;
 
-    --user-bubble: #133463;
-    --user-bubble-fg: #ffffff;
+    --user-bubble: #2c2c2e;
+    --user-bubble-fg: #f9fafb;
 
     --link: #7aa2ff;
     --code-bg: #1e1f22;
@@ -132,7 +139,11 @@
     --topbar-bg: #232328;
     --topbar-fg: #ababab;
 
-    --copy-fg: #ffffff;
+    --copy-fg: #adb2b8;
+    --think-icon: #adb2b8;
+    --think-text: #cfd3d6;
+    --think-line: #43454a;
+    --search-pill-bg: #151517;
     --hover-bg: rgba(255, 255, 255, 0.08);
     --scrollbar: rgba(255, 255, 255, 0.28);
     --shadow-popover:
@@ -177,8 +188,12 @@ body {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--frame-border);
-  /* 形态切换时底色和圆角平滑过渡，配合窗口展开动画 */
-  transition: background-color 0.26s ease, border-radius 0.26s ease;
+  /*
+   * 只过渡底色。
+   * 圆角不做过渡：展开/收起搜索结果栏时，右上、右下要立刻变成直角，
+   * 不能看到圆角慢慢收进去的动画。
+   */
+  transition: background-color 0.26s ease;
 }
 
 /*
@@ -372,7 +387,7 @@ body {
 .msg-ai .body {
   font-size: 16px;
   line-height: 22px;
-  color: var(--text);
+  color: var(--answer-fg);
   white-space: pre-wrap;
   word-break: break-word;
   user-select: text;
@@ -858,6 +873,357 @@ body {
   margin-left: -2px;
 }
 
+/*
+ * 回答还在生成时不显示下方操作行（复制按钮 / 搜索胶囊）。
+ * 回答结束或被手动停止后移除 .is-streaming，操作行才出现。
+ * 整行一起隐藏，避免生成过程中底部空出 20px 的按钮位置。
+ */
+.msg-group-ai.is-streaming .msg-actions {
+  display: none;
+}
+
+/* ── 深度思考 ─────────────────────────────────────────────── */
+
+.think-block {
+  margin: 0 0 10px;
+}
+
+.think-head {
+  /*
+   * 展开思考内容向上滚动时标题吸顶。
+   * 默认（顶部功能栏隐藏）贴在最顶部；功能栏出现时用下面的规则
+   * 下移到功能栏底部。sticky 自身的约束保证标题不会越过思考块顶部。
+   */
+  position: sticky;
+  top: -9px;
+  z-index: 6;
+  transition: top 0.18s ease;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 34px;
+  margin: 0 0 2px;
+  padding: 0;
+  border: 0;
+  background: var(--frame-content);
+  color: var(--placeholder);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.think-head:focus-visible {
+  outline: 2px solid #5685fe;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 顶部功能栏出现时，思考标题跟着下移，靠在功能栏底部 */
+.topbar.show ~ .messages .think-head {
+  top: 31px;
+}
+
+.think-icon {
+  display: inline-flex;
+  flex: none;
+  margin-right: 6px;
+  color: var(--think-icon);
+}
+
+.think-title {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 6px;
+  color: var(--think-text);
+  font-size: 16px;
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.think-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--think-text);
+  transition: transform 0.16s ease;
+}
+
+.think-block:not(.is-open) .think-chevron {
+  transform: rotate(-90deg);
+}
+
+.think-block.is-thinking .think-title {
+  background: linear-gradient(
+    90deg,
+    var(--think-text) 0%,
+    var(--answer-fg) 45%,
+    var(--think-text) 80%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: think-shimmer 1.6s linear infinite;
+}
+
+@keyframes think-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+.think-body {
+  display: none;
+}
+
+.think-block.is-open .think-body,
+.think-block.is-collapsing .think-body {
+  display: block;
+}
+
+/* 思考正文：小号 Markdown，左侧小圆点和竖线 */
+.think-text {
+  position: relative;
+  margin-top: 4px;
+  padding: 5px 0 5px 22px;
+}
+
+.think-text:first-child {
+  margin-top: 0;
+}
+
+.think-text {
+  --think-icon-top: 14px;
+  --think-icon-height: 5px;
+}
+
+.think-text-icon {
+  position: absolute;
+  top: var(--think-icon-top);
+  left: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--think-icon);
+}
+
+/*
+ * 思考块里所有片段的左侧竖线：
+ * 从上一段连到当前图标上方，再从图标下方连到下一段。
+ * 4px 的断口保证连线和图标之间始终有间距。
+ */
+.think-text::before,
+.think-search::before,
+.think-open::before,
+.think-text::after,
+.think-search::after,
+.think-open::after {
+  content: '';
+  position: absolute;
+  left: 7.5px;
+  width: 0;
+  border-left: 1px solid var(--think-line);
+  pointer-events: none;
+}
+
+.think-text::before,
+.think-search::before,
+.think-open::before {
+  top: 0;
+  height: calc(var(--think-icon-top) - 4px);
+}
+
+.think-text::after,
+.think-search::after,
+.think-open::after {
+  top: calc(var(--think-icon-top) + var(--think-icon-height) + 4px);
+  /* 向下延伸 4px，跨过片段之间的 margin，和下一段接上 */
+  bottom: -4px;
+}
+
+/* 第一段不再向上连，最后一段不再向下延伸 */
+.think-body > :first-child::before {
+  display: none;
+}
+
+.think-body > :last-child::after {
+  bottom: 0;
+}
+
+.think-text-body.md {
+  color: var(--think-text);
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.think-text-body.md > :first-child {
+  margin-top: 0;
+}
+
+.think-text-body.md > :last-child {
+  margin-bottom: 0;
+}
+
+.think-text-body.md p,
+.think-text-body.md ul,
+.think-text-body.md ol,
+.think-text-body.md blockquote {
+  margin: 12px 0;
+}
+
+.think-text-body.md blockquote {
+  color: var(--think-text);
+}
+
+.think-text-body.md h1,
+.think-text-body.md h2,
+.think-text-body.md h3,
+.think-text-body.md h4,
+.think-text-body.md h5,
+.think-text-body.md h6 {
+  margin: 12px 0;
+  color: var(--think-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.think-text-body.md code {
+  font-size: 12px;
+}
+
+.think-text-body.md a {
+  color: inherit;
+  pointer-events: none;
+  text-decoration: none;
+}
+
+/* 思考块里夹着的搜索行 */
+.think-search {
+  --think-icon-top: 9px;
+  --think-icon-height: 16px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 34px;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--think-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 24px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.think-search .search-icon {
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  color: var(--think-icon);
+}
+
+.think-search .search-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.think-search-label {
+  margin-right: 6px;
+}
+
+.think-search:hover .think-search-label {
+  color: var(--text);
+}
+
+.think-search .site-logos {
+  flex: none;
+}
+
+.think-search .site-logo {
+  width: 16px;
+  height: 16px;
+  margin-left: -4px;
+  border-color: var(--frame-content);
+  font-size: 8px;
+  line-height: 13px;
+}
+
+.think-search .site-logo:first-child {
+  margin-left: 0;
+}
+
+/* 思考块里夹着的「浏览 N 个页面」 */
+.think-open {
+  --think-icon-top: 10px;
+  --think-icon-height: 14px;
+  position: relative;
+  margin-top: 4px;
+  padding: 5px 0 5px 22px;
+  color: var(--think-text);
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.think-open-icon {
+  position: absolute;
+  top: 10px;
+  left: 0;
+  display: inline-flex;
+  color: var(--think-icon);
+}
+
+.think-open-content {
+  min-width: 0;
+}
+
+/* 「浏览 N 个页面」是标题，具体页面在下方和正文一样左对齐 */
+.think-open-label {
+  margin-bottom: 2px;
+}
+
+.think-open-pages {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+.think-open-page {
+  color: var(--think-text);
+  text-decoration: none;
+}
+
+.think-open-page.is-link {
+  cursor: pointer;
+}
+
+.think-open-page.is-link::after {
+  content: '↗';
+  display: inline-block;
+  margin-left: 2px;
+  font-size: 10px;
+  opacity: 0.8;
+  transform: translateY(-1px);
+}
+
+.think-open-page:hover {
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .think-block.is-thinking .think-title {
+    background: none;
+    color: var(--think-text);
+    animation: none;
+  }
+}
+
 /* 「继续生成」和复制按钮在同一行：复制在左，继续在右 */
 .msg-actions.has-continue {
   justify-content: space-between;
@@ -1330,3 +1696,322 @@ body {
  * 不占内容宽度，默认自动隐藏，滚动或悬停时出现。
  */
 
+
+/* ── 智能搜索：顶部入口 / 底部胶囊 / 右侧结果栏 ─────────────── */
+
+.shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.shell .app {
+  /* 宽度由 JS 固定成左侧内容宽度：搜索栏展开/收起时内容不跟着拉伸 */
+  flex: none;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 搜索栏展开时：左侧保留左圆角，右侧交给结果栏 */
+.shell.search-open .topbar {
+  border-top-right-radius: 0;
+}
+
+.shell.search-open .app {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  /*
+   * 保留 1px 边框宽度，只把颜色变透明。
+   * 直接删掉右边框会让内容宽度多 1px，展开/收起结果栏时正文和底部胶囊
+   * 会左右轻微跳动。
+   */
+  border-right-color: transparent;
+}
+
+.search-panel {
+  flex: none;
+  width: 260px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--frame-border);
+  border-left: 1px solid var(--history-border);
+  border-radius: 0 30px 30px 0;
+  background: var(--history-bg);
+}
+
+.search-panel[hidden] {
+  display: none;
+}
+
+.search-panel-head {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--history-border);
+}
+
+.search-panel-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.search-panel-close {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #ababab;
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.search-panel-close svg {
+  transform: rotate(90deg);
+}
+
+.search-panel-close:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+/* 加载中 / 加载失败：整体在结果栏内容区域垂直居中 */
+.search-panel-list.is-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 12px;
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.search-retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #5685fe;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.search-retry:hover {
+  text-decoration: underline;
+}
+
+.search-retry:focus-visible {
+  outline: 2px solid #5685fe;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.search-panel-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 10px;
+}
+
+.search-result {
+  display: block;
+  padding: 10px 9px;
+  border-radius: 10px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.14s ease;
+}
+
+.search-result:hover {
+  background: var(--hover-bg);
+}
+
+.search-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--placeholder);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+
+.search-result-meta .site-logo {
+  flex: none;
+  /* 搜索结果栏里的 logo 比气泡里的略大：14 + 2 = 16 */
+  width: 16px;
+  height: 16px;
+  margin-left: 0;
+  border-color: var(--history-bg);
+}
+
+.search-result-site {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-date {
+  flex: none;
+}
+
+.search-result-cite {
+  flex: none;
+  min-width: 14px;
+  height: 14px;
+  margin-left: auto;
+  padding: 0 4px;
+  border-radius: 6px 6px 6px 0;
+  background: var(--cite-bg);
+  color: var(--cite-fg);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+}
+
+.search-result-title {
+  display: -webkit-box;
+  margin-top: 6px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.search-result-snippet {
+  display: -webkit-box;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--placeholder);
+  font-size: 11px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* 回答顶部的搜索入口 */
+.search-top {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  /*
+   * 左侧多留 4px：悬浮底色向左延伸，图标不贴边。
+   * 负 margin 把元素整体左移同样的距离，图标视觉位置保持不变。
+   */
+  margin: 0 0 10px -4px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--placeholder);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.search-top:hover {
+  background: var(--hover-bg);
+}
+
+
+.search-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  color: var(--placeholder);
+}
+
+.search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.site-logos {
+  display: inline-flex;
+  align-items: center;
+  padding-left: 0;
+}
+
+.site-logo:first-child {
+  margin-left: 0;
+}
+
+.site-logo {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin-left: -5px;
+  overflow: hidden;
+  border: 1.5px solid var(--frame-content);
+  border-radius: 50%;
+  background: var(--cite-bg);
+  color: var(--cite-fg);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
+.site-logo img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 回答底部、和复制按钮同一排的搜索胶囊 */
+.search-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin-left: auto;
+  padding: 2px 8px 2px 5px;
+  border: 1px solid var(--tool-border);
+  border-radius: 12px;
+  background: var(--search-pill-bg);
+  color: var(--placeholder);
+  font: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.search-pill:hover {
+  background: var(--hover-bg);
+}
+
+.search-pill .site-logo {
+  border-color: var(--search-pill-bg);
+}
