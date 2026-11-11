@@ -37,6 +37,52 @@ export interface SearchInfo {
   sources: SearchSource[]
 }
 
+/** 深度思考里夹着的一次搜索：数量 + 图标，详情按需拉取 */
+export interface ThinkingSearch {
+  count: number
+  icons: string[]
+  /** 历史对话里直接带完整结果；实时阶段只有图标，打开结果栏时再拉 */
+  info?: SearchInfo
+}
+
+/** 深度思考里的正文片段 */
+export interface ThinkingTextSegment {
+  kind: 'think'
+  text: string
+  /** 实时阶段页面已经渲染好的 HTML；历史对话只有 Markdown */
+  html?: string
+}
+
+/** 深度思考里夹着的一次搜索 */
+export interface ThinkingSearchSegment extends ThinkingSearch {
+  kind: 'search'
+  /** 这条回答里的第几次搜索（从 0 开始），用于按需拉取 */
+  searchIndex: number
+}
+
+/** 深度思考里的「浏览 N 个页面」 */
+export interface ThinkingOpenPage {
+  title: string
+  url: string
+}
+
+export interface ThinkingOpenSegment {
+  kind: 'open'
+  pages: ThinkingOpenPage[]
+}
+
+export type ThinkingSegment = ThinkingTextSegment | ThinkingSearchSegment | ThinkingOpenSegment
+
+/** 一条 AI 回答的深度思考内容（按网页里的片段顺序） */
+export interface ThinkingInfo {
+  status: 'thinking' | 'done' | 'stopped'
+  /** 思考结束后的用时；思考中不显示 */
+  elapsedSecs?: number
+  segments: ThinkingSegment[]
+  /** 底部「N 个网页」的聚合搜索结果 */
+  aggregateSearch?: ThinkingSearch
+}
+
 /** 历史对话里的消息。AI 消息额外带渲染好的 HTML（快速窗口负责清洗） */
 export interface HistoryMessage {
   role: 'user' | 'ai'
@@ -46,8 +92,10 @@ export interface HistoryMessage {
   markdown?: string
   /** 页面虚拟列表的消息 key，用于继续加载更早的消息 */
   key?: string
-  /** 智能搜索的网页结果 */
+  /** 智能搜索的网页结果（没有深度思考、只有搜索时使用） */
   search?: SearchInfo
+  /** 深度思考的内容 */
+  thinking?: ThinkingInfo
 }
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
@@ -56,10 +104,15 @@ export type QuickEvent =
   | { type: 'answer-start' }
   /** 回答增量更新：text 用于纯文本兜底/复制，html 是页面里渲染好的 Markdown */
   | { type: 'answer-update'; text: string; html?: string }
+  /** 深度思考增量：按网页里的片段顺序带上思考正文和夹杂的搜索 */
+  | { type: 'answer-thinking'; thinking: ThinkingInfo; answerIndex?: number }
   /** 搜索结果摘要（先到）：顶部气泡只需要数量和图标 */
-  | { type: 'answer-search-summary'; summary: SearchSummary }
-  /** 完整搜索结果（后到，用于右侧搜索栏） */
-  | { type: 'answer-search'; search: SearchInfo | null }
+  | {
+      type: 'answer-search-summary'
+      summary: SearchSummary
+      /** 这条回答在网页里的序号，打开结果栏时按需拉完整列表 */
+      answerIndex?: number
+    }
   /** 回答结束 */
   | { type: 'answer-done' }
   /**
@@ -196,6 +249,16 @@ export interface DsApi {
 
   /** 搜索结果栏展开/收起：主进程会相应加宽/收窄窗口 */
   setSearchPanel: (open: boolean) => void
+
+  /**
+   * 按需拉取某条回答的完整搜索结果。
+   * searchIndex 指定第几次搜索；不传则聚合去重（底部「N 个网页」）。
+   * 失败返回 null。
+   */
+  requestSearchDetails: (
+    answerIndex: number,
+    searchIndex?: number,
+  ) => Promise<SearchInfo | null>
 
   /** 顶栏「新对话」：清空当前对话 */
   quickNewChat: () => void

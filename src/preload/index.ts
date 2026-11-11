@@ -41,6 +41,8 @@ const api: DsApi = {
   loadOlderQuickHistory: () => ipcRenderer.send('ds:quick-history-older'),
   setQuickMode: (mode: QuickMode) => ipcRenderer.send('ds:quick-mode', mode),
   setSearchPanel: (open: boolean) => ipcRenderer.send('ds:quick-search-panel', open),
+  requestSearchDetails: (answerIndex: number, searchIndex?: number) =>
+    ipcRenderer.invoke('ds:search-details', answerIndex, searchIndex),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),
 

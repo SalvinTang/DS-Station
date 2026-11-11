@@ -1,6 +1,12 @@
 import type { WebContentsView } from 'electron'
 import { DEEPSEEK_ORIGIN } from '../../shared/constants'
-import type { HistoryEntry, HistoryMessage, SearchInfo, SearchSummary } from '../../shared/types'
+import type {
+  HistoryEntry,
+  HistoryMessage,
+  SearchInfo,
+  SearchSummary,
+  ThinkingInfo,
+} from '../../shared/types'
 import {
   COMPOSER_TOGGLES,
   SELECTOR_KEYS,
@@ -582,7 +588,10 @@ export class DeepSeekPage {
    * 页面上的搜索入口在回答正文外层，这里只拿它做“是否搜索过”和数量校验；
    * 网页列表本身从 history_messages 的 SEARCH 片段里取，和网页端一致。
    */
-  async readCurrentSearchInfo(answerIndex?: number): Promise<SearchInfo | null> {
+  async readCurrentSearchInfo(
+    answerIndex?: number,
+    searchIndex?: number,
+  ): Promise<SearchInfo | null> {
     await this.installApiHeaderHook()
 
     const result = await this.run<{
@@ -598,29 +607,8 @@ export class DeepSeekPage {
           if (!pathMatch) return { noSearch: true };
           const sessionId = decodeURIComponent(pathMatch[1]);
 
-          const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
           const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
-          const answer = index === null ? answers[answers.length - 1] : answers[index];
-          if (!answer) return { noSearch: true };
-
-          // 只看当前这条回答所在的消息容器，避免误用上一条回答的搜索结果
-          const messageRoot =
-            answer.closest('.ds-message') ||
-            answer.closest('[data-virtual-list-item-key]') ||
-            answer.parentElement;
-          let summaryCount = null;
-          if (messageRoot) {
-            for (const el of Array.from(messageRoot.querySelectorAll('span, div'))) {
-              if (el.children.length > 0) continue;
-              const text = (el.textContent || '').trim();
-              const hit = text.match(/^搜索到\\s*(\\d+)\\s*个网页$/);
-              if (hit) {
-                summaryCount = Number(hit[1]);
-                break;
-              }
-            }
-          }
-          if (summaryCount === null) return { noSearch: true };
+          const wantedSearch = ${typeof searchIndex === 'number' ? String(searchIndex) : 'null'};
 
           const url = '/api/v0/chat/history_messages?chat_session_id=' + encodeURIComponent(sessionId);
           const resp = await fetch(url, { credentials: 'include', headers });
@@ -630,15 +618,48 @@ export class DeepSeekPage {
           const biz = json && json.data && json.data.biz_data;
           const messages = (biz && biz.chat_messages) || [];
 
-          // 从最后一条往前找，数量和页面上显示的一致才算当前回答
-          for (let i = messages.length - 1; i >= 0; i -= 1) {
-            const message = messages[i];
-            if (!message || message.role === 'USER') continue;
-            const fragment = (message.fragments || []).find((f) => f.type === 'SEARCH');
-            if (!fragment || !Array.isArray(fragment.results)) continue;
-            const sources = fragment.results
-              .filter((item) => item && typeof item.url === 'string' && /^https?:\\/\\//i.test(item.url))
-              .map((item) => ({
+          const hasSearch = (message) =>
+            !!message &&
+            (message.fragments || []).some(
+              (fragment) =>
+                (fragment.type === 'SEARCH' || fragment.type === 'TOOL_SEARCH') &&
+                Array.isArray(fragment.results) &&
+                fragment.results.length > 0,
+            );
+
+          const assistants = messages.filter((message) => message && message.role !== 'USER');
+          let target = index !== null ? assistants[index] : null;
+          if (index === null) {
+            for (let i = assistants.length - 1; i >= 0; i -= 1) {
+              if (hasSearch(assistants[i])) {
+                target = assistants[i];
+                break;
+              }
+            }
+          }
+          // 指定了 answerIndex 时，接口里还没有这条回答就等下一轮，
+          // 不能退回去拿上一条回答的搜索结果。
+          if (!target || !hasSearch(target)) return { noSearch: true };
+
+          const fragments = (target.fragments || []).filter(
+            (fragment) =>
+              (fragment.type === 'SEARCH' || fragment.type === 'TOOL_SEARCH') &&
+              Array.isArray(fragment.results) &&
+              fragment.results.length > 0,
+          );
+          const chosen =
+            wantedSearch === null
+              ? fragments
+              : fragments[wantedSearch]
+                ? [fragments[wantedSearch]]
+                : [];
+          if (!chosen.length) return { noSearch: true };
+
+          const sources = [];
+          for (const fragment of chosen) {
+            for (const item of fragment.results) {
+              if (!item || typeof item.url !== 'string' || !/^https?:\\/\\//i.test(item.url)) continue;
+              sources.push({
                 url: item.url,
                 title: typeof item.title === 'string' ? item.title : '',
                 snippet: typeof item.snippet === 'string' ? item.snippet : '',
@@ -646,14 +667,22 @@ export class DeepSeekPage {
                 publishedAt: Number(item.published_at) || 0,
                 siteIcon: typeof item.site_icon === 'string' ? item.site_icon : '',
                 siteName: typeof item.site_name === 'string' ? item.site_name : '',
-              }))
-              .sort((a, b) => a.citeIndex - b.citeIndex);
-            if (!sources.length) continue;
-            if (sources.length === summaryCount) {
-              return { search: { count: sources.length, sources: sources } };
+              });
             }
           }
-          return { noSearch: true };
+          if (!sources.length) return { noSearch: true };
+
+          // 单次搜索保留原始列表；底部聚合按 URL 去重
+          let outSources = sources.sort((a, b) => a.citeIndex - b.citeIndex);
+          if (wantedSearch === null) {
+            const seen = new Set();
+            outSources = outSources.filter((source) => {
+              if (seen.has(source.url)) return false;
+              seen.add(source.url);
+              return true;
+            });
+          }
+          return { search: { count: outSources.length, sources: outSources } };
         } catch (error) {
           return { error: String(error && error.message ? error.message : error) };
         }
@@ -662,6 +691,252 @@ export class DeepSeekPage {
 
     if (result?.error) console.log('[搜索] 读取当前回答的网页结果失败:', result.error)
     return result?.search ?? null
+  }
+
+  /**
+   * 当前实时回答的深度思考。
+   *
+   * 网页的思考区是一个按片段顺序排列的列表：
+   *   THINK 正文 → 搜索行 → THINK 正文 → 浏览页面 → …
+   * 这里按 DOM 顺序读出来，搜索详情仍然只保留数量和图标，点击后再按需拉。
+   */
+  async readCurrentThinking(answerIndex?: number): Promise<ThinkingInfo | null> {
+    return this.run<ThinkingInfo | null>(`
+      const textOf = (el) =>
+        ((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, ' ').trim();
+
+      const readSiteIcons = (root) => {
+        const icons = [];
+        const push = (src) => {
+          if (src && /^https:\\/\\/cdn\\.deepseek\\.com\\//i.test(src) && icons.length < 4) {
+            icons.push(src);
+          }
+        };
+        for (const img of Array.from(root.querySelectorAll('img'))) {
+          push(img.getAttribute('src') || '');
+        }
+        if (icons.length < 4) {
+          for (const node of Array.from(root.querySelectorAll('*'))) {
+            const bg = getComputedStyle(node).backgroundImage || '';
+            const match = bg.match(/url\\(["']?(https:\\/\\/cdn\\.deepseek\\.com\\/[^"')]+)/i);
+            if (match) push(match[1]);
+            if (icons.length >= 4) break;
+          }
+        }
+        return icons;
+      };
+
+      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
+      const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
+      let messageRoot = null;
+      const answer =
+        index === null ? answers[answers.length - 1] : answers[index];
+      if (answer) {
+        messageRoot =
+          answer.closest('.ds-message') ||
+          answer.closest('[data-virtual-list-item-key]') ||
+          answer.parentElement;
+      }
+      if (!messageRoot) {
+        const messages = Array.from(document.querySelectorAll('.ds-message'));
+        const lastMessage = messages[messages.length - 1] || null;
+        const lastAnswer = answers[answers.length - 1] || null;
+        const lastAnswerRoot = lastAnswer
+          ? lastAnswer.closest('.ds-message') ||
+            lastAnswer.closest('[data-virtual-list-item-key]') ||
+            lastAnswer.parentElement
+          : null;
+        // 新回答还没渲染出正文时，别把上一条回答的思考当成这一轮的
+        if (lastMessage && lastMessage === lastAnswerRoot) return null;
+        messageRoot = lastMessage;
+      }
+      if (!messageRoot) return null;
+
+      let area = null;
+      const firstThink = messageRoot.querySelector('.ds-think-content');
+      if (firstThink) area = firstThink.parentElement;
+      if (!area) {
+        // 思考刚出现、正文还没写进 DOM：按标题文字找到折叠区
+        for (const el of Array.from(messageRoot.querySelectorAll('div'))) {
+          const t = textOf(el);
+          if (!t || t.length > 40) continue;
+          if (/^(正在思考|已思考[（(]用时|已停止)/.test(t)) {
+            area = el.parentElement;
+            break;
+          }
+        }
+      }
+      if (!area) return null;
+
+      let headerText = '';
+      for (const el of Array.from(area.children)) {
+        const t = textOf(el);
+        if (/^(正在思考|已思考[（(]用时|已停止|Thinking|Thought for|Stopped)/.test(t)) {
+          headerText = t;
+          break;
+        }
+      }
+
+      let status = 'thinking';
+      let elapsedSecs;
+      const zhDone = headerText.match(/已思考[（(]用时\\s*(\\d+)\\s*秒[）)]/);
+      const enDone = headerText.match(/Thought for\\s*(\\d+)\\s*seconds?/i);
+      if (zhDone) {
+        status = 'done';
+        elapsedSecs = Number(zhDone[1]);
+      } else if (enDone) {
+        status = 'done';
+        elapsedSecs = Number(enDone[1]);
+      } else if (/已停止|Stopped/i.test(headerText)) {
+        status = 'stopped';
+      } else if (/已思考|Thought for/i.test(headerText)) {
+        status = 'done';
+      }
+
+      const segments = [];
+      let searchIndex = 0;
+      for (const el of Array.from(area.children)) {
+        if (el.classList && el.classList.contains('ds-think-content')) {
+          const markdown = el.querySelector('.ds-markdown') || el;
+          const text = ((markdown.innerText || markdown.textContent) || '').trim();
+          if (text) {
+            segments.push({
+              kind: 'think',
+              text: text,
+              html: markdown.innerHTML,
+            });
+          }
+          continue;
+        }
+
+        const t = textOf(el);
+        const searchMatch = t.match(/^(?:搜索到|已阅读)\\s*(\\d+)\\s*个网页/);
+        if (searchMatch) {
+          segments.push({
+            kind: 'search',
+            searchIndex: searchIndex,
+            count: Number(searchMatch[1]),
+            icons: readSiteIcons(el),
+          });
+          searchIndex += 1;
+          continue;
+        }
+
+        const openMatch = t.match(/^(?:浏览|阅读)\\s*(\\d+)\\s*个页面/);
+        if (openMatch) {
+          const pages = [];
+          for (const link of Array.from(el.querySelectorAll('a[href]'))) {
+            const href = link.getAttribute('href') || '';
+            if (!/^https?:\\/\\//i.test(href)) continue;
+            const title = textOf(link);
+            if (title && !pages.some((page) => page.url === href)) {
+              pages.push({ title: title, url: href });
+            }
+          }
+          if (!pages.length) {
+            const raw = (el.innerText || el.textContent || '')
+              .replace(/^(?:浏览|阅读)\\s*\\d+\\s*个页面\\s*/, '')
+              .trim();
+            for (const line of raw.split(/\\n+/)) {
+              const title = line.trim();
+              if (title && !pages.some((page) => page.title === title)) {
+                pages.push({ title: title, url: '' });
+              }
+            }
+          }
+          segments.push({ kind: 'open', pages: pages });
+          continue;
+        }
+      }
+
+      let aggregateSearch = null;
+      for (const el of Array.from(messageRoot.querySelectorAll('div, span'))) {
+        if (el.children.length > 3) continue;
+        const t = textOf(el);
+        const match = t.match(/^(\\d+)\\s*个网页$/);
+        if (!match) continue;
+        const icons = readSiteIcons(el);
+        if (!aggregateSearch || icons.length) {
+          aggregateSearch = { count: Number(match[1]), icons: icons };
+        }
+        if (icons.length) break;
+      }
+
+      if (!segments.length && !headerText) return null;
+      return {
+        status: status,
+        elapsedSecs: elapsedSecs,
+        segments: segments,
+        aggregateSearch: aggregateSearch || undefined,
+      };
+    `)
+  }
+
+  /**
+   * 思考结束后从 history_messages 读最终用时。
+   * 网页标题行有时要到正文开始一会儿后才补上「用时 N 秒」，
+   * 这里直接用接口里的 THINK.elapsed_secs 求和，保证正文一出现就有时间。
+   */
+  async readThinkingElapsed(answerIndex?: number): Promise<number | null> {
+    await this.installApiHeaderHook()
+
+    const result = await this.run<{ elapsed?: number; error?: string }>(`
+      return (async () => {
+        try {
+          const headers = window.__dsApiHeaders || null;
+          if (!headers) return { error: 'no headers' };
+          const pathMatch = location.pathname.match(/\\/a\\/chat\\/s\\/([^/?#]+)/);
+          if (!pathMatch) return { error: 'no session' };
+          const sessionId = decodeURIComponent(pathMatch[1]);
+          const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
+
+          const url = '/api/v0/chat/history_messages?chat_session_id=' + encodeURIComponent(sessionId);
+          const resp = await fetch(url, { credentials: 'include', headers });
+          if (!resp.ok) return { error: 'http ' + resp.status };
+          const json = await resp.json();
+          if (json && json.code === 40003) return { error: 'invalid token' };
+          const biz = json && json.data && json.data.biz_data;
+          const messages = (biz && biz.chat_messages) || [];
+          const assistants = messages.filter((message) => message && message.role !== 'USER');
+
+          const hasThink = (message) =>
+            !!message &&
+            (message.fragments || []).some(
+              (fragment) =>
+                fragment.type === 'THINK' &&
+                typeof fragment.content === 'string' &&
+                fragment.content.trim(),
+            );
+
+          let target = index !== null ? assistants[index] : null;
+          if (index === null) {
+            for (let i = assistants.length - 1; i >= 0; i -= 1) {
+              if (hasThink(assistants[i])) {
+                target = assistants[i];
+                break;
+              }
+            }
+          }
+          // 指定的回答还没进接口时等下一轮，避免拿上一条的用时
+          if (!target || !hasThink(target)) return { error: 'no think' };
+
+          const elapsed = (target.fragments || [])
+            .filter((fragment) => fragment.type === 'THINK')
+            .reduce(
+              (sum, fragment) =>
+                sum + (Number(fragment.elapsed_secs ?? fragment.elapsedSecs) || 0),
+              0,
+            );
+          if (!(elapsed > 0)) return { error: 'no elapsed' };
+          return { elapsed: elapsed };
+        } catch (error) {
+          return { error: String(error && error.message ? error.message : error) };
+        }
+      })();
+    `)
+
+    if (result?.error) console.log('[深度思考] 读取最终用时失败:', result.error)
+    return result?.elapsed ?? null
   }
 
   // ── 历史对话 ──────────────────────────────────────────────────
@@ -1023,13 +1298,9 @@ export class DeepSeekPage {
                   .map((fragment) => fragment.content)
                   .join(String.fromCharCode(10, 10))
                   .trim();
-                if (!response) continue;
 
-                // 智能搜索：SEARCH 片段里带完整的网页结果
-                const searchFragment = fragments.find((fragment) => fragment.type === 'SEARCH');
-                let search = null;
-                if (searchFragment && Array.isArray(searchFragment.results)) {
-                  const sources = searchFragment.results
+                const toSources = (results) =>
+                  (Array.isArray(results) ? results : [])
                     .filter((item) => item && typeof item.url === 'string' && /^https?:\\/\\//i.test(item.url))
                     .map((item) => ({
                       url: item.url,
@@ -1041,15 +1312,146 @@ export class DeepSeekPage {
                       siteName: typeof item.site_name === 'string' ? item.site_name : '',
                     }))
                     .sort((a, b) => a.citeIndex - b.citeIndex);
-                  if (sources.length) search = { count: sources.length, sources: sources };
+
+                const dedupeSources = (list) => {
+                  const seen = new Set();
+                  const outList = [];
+                  for (const source of list) {
+                    if (!source || !source.url || seen.has(source.url)) continue;
+                    seen.add(source.url);
+                    outList.push(source);
+                  }
+                  return outList;
+                };
+
+                const searchFragments = fragments.filter(
+                  (fragment) =>
+                    (fragment.type === 'SEARCH' || fragment.type === 'TOOL_SEARCH') &&
+                    Array.isArray(fragment.results) &&
+                    fragment.results.length > 0,
+                );
+                const thinkFragments = fragments.filter(
+                  (fragment) =>
+                    fragment.type === 'THINK' &&
+                    typeof fragment.content === 'string' &&
+                    fragment.content.trim(),
+                );
+
+                let thinking = null;
+                let search = null;
+
+                if (thinkFragments.length) {
+                  const segments = [];
+                  let searchIndex = 0;
+                  let openPages = [];
+                  const flushOpen = () => {
+                    if (!openPages.length) return;
+                    const seen = new Set();
+                    const pages = [];
+                    for (const page of openPages) {
+                      const key = page.url || page.title;
+                      if (!key || seen.has(key)) continue;
+                      seen.add(key);
+                      pages.push(page);
+                    }
+                    if (pages.length) segments.push({ kind: 'open', pages: pages });
+                    openPages = [];
+                  };
+
+                  for (const fragment of fragments) {
+                    if (
+                      fragment.type === 'THINK' &&
+                      typeof fragment.content === 'string' &&
+                      fragment.content.trim()
+                    ) {
+                      flushOpen();
+                      segments.push({ kind: 'think', text: fragment.content.trim() });
+                      continue;
+                    }
+
+                    if (fragment.type === 'SEARCH' || fragment.type === 'TOOL_SEARCH') {
+                      const sources = toSources(fragment.results);
+                      if (!sources.length) continue;
+                      flushOpen();
+                      segments.push({
+                        kind: 'search',
+                        searchIndex: searchIndex,
+                        count: sources.length,
+                        icons: sources.slice(0, 4).map((source) => source.siteIcon).filter(Boolean),
+                        info: { count: sources.length, sources: sources },
+                      });
+                      searchIndex += 1;
+                      continue;
+                    }
+
+                    if (fragment.type === 'TOOL_OPEN' && fragment.result) {
+                      const result = fragment.result;
+                      if (
+                        result &&
+                        typeof result.url === 'string' &&
+                        /^https?:\\/\\//i.test(result.url)
+                      ) {
+                        openPages.push({
+                          title: typeof result.title === 'string' ? result.title : result.url,
+                          url: result.url,
+                        });
+                      }
+                      continue;
+                    }
+
+                    // 其它类型（TIP 等）不打断「浏览页面」分组；
+                    // 只有下一段 THINK / 搜索开始时才 flush
+                  }
+                  flushOpen();
+
+                  const elapsedSecs = thinkFragments.reduce(
+                    (sum, fragment) =>
+                      sum + (Number(fragment.elapsed_secs ?? fragment.elapsedSecs) || 0),
+                    0,
+                  );
+
+                  const allSources = [];
+                  for (const fragment of searchFragments) allSources.push(...toSources(fragment.results));
+                  const uniqueSources = dedupeSources(allSources);
+                  const aggregateSearch = uniqueSources.length
+                    ? {
+                        count: uniqueSources.length,
+                        icons: uniqueSources
+                          .slice(0, 4)
+                          .map((source) => source.siteIcon)
+                          .filter(Boolean),
+                        info: { count: uniqueSources.length, sources: uniqueSources },
+                      }
+                    : undefined;
+
+                  if (segments.length) {
+                    thinking = {
+                      // 有的回答在思考阶段被停止，没有正文；历史里显示「已停止」
+                      status: response ? 'done' : 'stopped',
+                      elapsedSecs: elapsedSecs > 0 ? elapsedSecs : undefined,
+                      segments: segments,
+                      aggregateSearch: aggregateSearch,
+                    };
+                  }
+                } else if (searchFragments.length) {
+                  // 没有深度思考、只有搜索：沿用原来的顶部搜索气泡
+                  const allSources = [];
+                  for (const fragment of searchFragments) allSources.push(...toSources(fragment.results));
+                  const uniqueSources = dedupeSources(allSources);
+                  if (uniqueSources.length) {
+                    search = { count: uniqueSources.length, sources: uniqueSources };
+                  }
                 }
+
+                if (!response && !thinking) continue;
 
                 out.push({
                   role: 'ai',
                   text: response,
-                  markdown: response,
+                  markdown: response || undefined,
                   key: String(message.message_id),
                   search: search || undefined,
+                  thinking: thinking || undefined,
                 });
               }
               return { messages: out };

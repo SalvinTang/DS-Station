@@ -15,6 +15,12 @@ import type {
   SearchInfo,
   SearchSource,
   SearchSummary,
+  ThinkingInfo,
+  ThinkingOpenSegment,
+  ThinkingSearch,
+  ThinkingSearchSegment,
+  ThinkingSegment,
+  ThinkingTextSegment,
 } from '../../shared/types'
 import { renderAiContent, setMarkdownLabels } from './markdown'
 import { clearMarkdownCache, renderApiMarkdown } from './markdown-render'
@@ -54,6 +60,40 @@ const SEARCH_ICON = `
   <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <path d="M11.748 6.7028C11.748 3.90104 9.47653 1.62976 6.6748 1.62956C3.87291 1.62956 1.60156 3.90091 1.60156 6.7028C1.60176 9.50453 3.87304 11.776 6.6748 11.776C9.47641 11.7759 11.7479 9.50441 11.748 6.7028ZM13.0479 6.7028C13.0477 10.2224 10.1944 13.0757 6.6748 13.0759C3.15507 13.0759 0.300977 10.2225 0.300781 6.7028C0.300781 3.18294 3.15494 0.328781 6.6748 0.328781C10.1945 0.328977 13.0479 3.18307 13.0479 6.7028Z" fill="currentColor"/>
     <path d="M15.6991 14.7513L14.7792 15.6712L11.3974 12.2894L12.3173 11.3694L15.6991 14.7513Z" fill="currentColor"/>
+  </svg>`
+
+/* 和快捷面板「深度思考」按钮使用同一个图标 */
+const THINK_ICON = `
+  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+    <path
+      fill="currentColor"
+      d="M8 6.77c0.679 0 1.23 0.551 1.23 1.23s-0.551 1.23-1.23 1.23S6.77 8.679 6.77 8 7.321 6.77 8 6.77z"
+    />
+    <path
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      d="M10.731 10.731C7.526 13.936 3.706 15.31 2.198 13.802 0.69 12.294 2.065 8.474 5.27 5.269 8.475 2.064 12.294 0.69 13.802 2.198 15.31 3.706 13.936 7.526 10.731 10.731z"
+    />
+    <path
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      d="M10.731 5.269C13.936 8.474 15.31 12.294 13.802 13.802 12.294 15.31 8.475 13.936 5.27 10.731 2.065 7.526 0.69 3.706 2.198 2.198 3.706 0.69 7.526 2.064 10.731 5.269z"
+    />
+  </svg>`
+
+const CHEVRON_ICON = `
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+    <path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`
+
+const OPEN_PAGE_ICON = `
+  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true">
+    <path d="M4.5 2.2h4.2L12 5.5v8.3H4.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/>
+    <path d="M8.6 2.4v3.3h3.3M6.3 8h3.4M6.3 10.5h3.4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
   </svg>`
 
 /** 默认发送图标（向上箭头）。HTML 里也有一份，状态切换时用这里覆盖 */
@@ -170,6 +210,14 @@ let searchPanelOpen = false
 let activeSearchGroup: HTMLElement | null = null
 /** 消息组对应的搜索结果，用于回答结束后补上底部胶囊 */
 const groupSearchInfo = new WeakMap<HTMLElement, SearchInfo>()
+/** 深度思考块里每一次搜索按需拉到的完整结果 */
+const groupSearchSegments = new WeakMap<HTMLElement, Map<number, SearchInfo>>()
+/** 实时回答在网页里的序号，打开结果栏时按需拉完整列表 */
+const groupAnswerIndex = new WeakMap<HTMLElement, number>()
+/** 搜索结果栏按需请求令牌：关闭/切换回答时让旧请求失效 */
+let searchDetailsToken = 0
+/** 当前结果栏对应的是哪一次搜索；undefined 表示底部聚合 */
+let activeSearchIndex: number | undefined
 /** 搜索结果栏宽度（和主进程 quick-window.ts 保持一致） */
 const SEARCH_PANEL_WIDTH = 260
 
@@ -569,6 +617,25 @@ function alignMessageToTop(group: HTMLElement, animate: boolean): void {
 }
 
 /**
+ * 思考结束、正文开始：把正文第一行顶到「顶栏下方 10px」。
+ * 上方已经看完的思考块随之滚出视野，用户直接看正文逐步出现。
+ */
+function alignAnswerBodyToTop(body: HTMLElement): void {
+  messagesTail.style.height = '0px'
+
+  const bodyRect = body.getBoundingClientRect()
+  const bodyTop = bodyRect.top - messages.getBoundingClientRect().top + messages.scrollTop
+  const below = messagesInner.getBoundingClientRect().bottom - bodyRect.bottom
+  const needed = messages.clientHeight - MESSAGE_TOP_ANCHOR - body.offsetHeight - below
+  if (needed > 0) messagesTail.style.height = `${needed + TAIL_SLACK}px`
+
+  const target = Math.max(0, bodyTop - MESSAGE_TOP_ANCHOR)
+  suppressScrollButtonDuringAnimation()
+  messages.scrollTo({ top: target, behavior: 'smooth' })
+}
+
+
+/**
  * 回答结束：尽量收回补位空间。
  *
  * 只收到「不会让当前视图被夹走」的程度 —— 如果回答很短、内容底部撑不满视口，
@@ -682,6 +749,316 @@ function searchInfoFromSummary(summary: SearchSummary): SearchInfo {
   }
 }
 
+function thinkingSearchInfo(search: ThinkingSearch): SearchInfo {
+  return search.info ?? searchInfoFromSummary({ count: search.count, icons: search.icons })
+}
+
+/**
+ * 底部聚合搜索的兜底：
+ * 实时阶段网页底部的「N 个网页」有时晚于正文出现，先按思考块里的
+ * 搜索片段拼一个摘要，保证胶囊不会完全不显示；拿到网页真实数量后再更新。
+ */
+function aggregateFromThinking(thinking: ThinkingInfo): ThinkingSearch | null {
+  const searches = thinking.segments.filter(
+    (segment): segment is ThinkingSearchSegment => segment.kind === 'search',
+  )
+  if (!searches.length) return null
+
+  const allSources: SearchSource[] = []
+  for (const search of searches) {
+    if (search.info) allSources.push(...search.info.sources)
+  }
+  if (allSources.length) {
+    const seen = new Set<string>()
+    const sources: SearchSource[] = []
+    for (const source of allSources) {
+      if (!source.url || seen.has(source.url)) continue
+      seen.add(source.url)
+      sources.push(source)
+    }
+    if (sources.length) {
+      return {
+        count: sources.length,
+        icons: sources.slice(0, 4).map((source) => source.siteIcon).filter(Boolean),
+        info: { count: sources.length, sources },
+      }
+    }
+  }
+
+  const count = searches.reduce((sum, search) => sum + search.count, 0)
+  const icons: string[] = []
+  for (const search of searches) {
+    for (const icon of search.icons) {
+      if (icons.length >= 4) break
+      icons.push(icon)
+    }
+    if (icons.length >= 4) break
+  }
+  return { count, icons }
+}
+
+function getThinkingSegmentInfo(group: HTMLElement, searchIndex: number): SearchInfo | null {
+  return groupSearchSegments.get(group)?.get(searchIndex) ?? null
+}
+
+function setThinkingSegmentInfo(group: HTMLElement, searchIndex: number, info: SearchInfo): void {
+  let map = groupSearchSegments.get(group)
+  if (!map) {
+    map = new Map()
+    groupSearchSegments.set(group, map)
+  }
+  map.set(searchIndex, info)
+}
+
+function thinkingTitle(thinking: ThinkingInfo): string {
+  if (thinking.status === 'thinking') return t('quick.thinkThinking')
+  if (thinking.status === 'stopped') return t('quick.thinkStopped')
+  const elapsed = thinking.elapsedSecs
+  if (typeof elapsed === 'number' && elapsed > 0) {
+    const seconds = Math.max(1, Math.round(elapsed))
+    return t(seconds > 1 ? 'quick.thinkDone' : 'quick.thinkDoneOne', { n: seconds })
+  }
+  return t('quick.thinkDoneShort')
+}
+
+/** 深度思考块的状态信息，回答结束/停止时用来更新标题 */
+const groupThinkingInfo = new WeakMap<HTMLElement, ThinkingInfo>()
+
+function createThinkBlock(group: HTMLElement, collapsed: boolean): HTMLElement {
+  const block = document.createElement('div')
+  block.className = 'think-block'
+  block.innerHTML = `
+    <button class="think-head" type="button">
+      <span class="think-icon">${THINK_ICON}</span>
+      <span class="think-title"></span>
+      <span class="think-chevron">${CHEVRON_ICON}</span>
+    </button>
+    <div class="think-body"></div>
+  `
+
+  const anchor = group.querySelector('.search-top') || group.querySelector('.msg-ai')
+  if (anchor) group.insertBefore(block, anchor)
+  else group.appendChild(block)
+
+  if (!collapsed) block.classList.add('is-open')
+
+  const head = block.querySelector('.think-head') as HTMLButtonElement
+  head.setAttribute('aria-expanded', String(block.classList.contains('is-open')))
+  head.addEventListener('click', () => {
+    if (block.dataset.animating === '1') return
+    if (block.classList.contains('is-open')) collapseThinkBlock(block, head)
+    else {
+      block.classList.add('is-open')
+      head.setAttribute('aria-expanded', 'true')
+    }
+  })
+
+  return block
+}
+
+/**
+ * 收起思考块：一边把正文高度压到 0，一边把滚动位置调回
+ * 「思考标题贴住顶部功能栏」的位置。
+ *
+ * 只看收起后的布局，标题会停在原位、正文贴到标题下面；
+ * 高度和滚动同步动画，避免内容瞬间跳一下再滚很远。
+ */
+function collapseThinkBlock(block: HTMLElement, head: HTMLElement): void {
+  const body = block.querySelector('.think-body') as HTMLElement | null
+  const close = (): void => {
+    block.classList.remove('is-open')
+    head.setAttribute('aria-expanded', 'false')
+  }
+  if (!body) {
+    close()
+    return
+  }
+
+  const messagesRect = messages.getBoundingClientRect()
+  const blockRect = block.getBoundingClientRect()
+  const headerTop = head.getBoundingClientRect().top - messagesRect.top
+  const startScroll = messages.scrollTop
+  const blockDocTop = blockRect.top - messagesRect.top + startScroll
+  // 保持标题当前的屏幕位置不变，只把思考块顶端滚到标题所在的位置
+  const targetScroll = Math.max(0, blockDocTop - headerTop)
+
+  const height = body.offsetHeight
+  const duration = 220
+  block.dataset.animating = '1'
+  close()
+  block.classList.add('is-collapsing')
+  body.style.height = `${height}px`
+  body.style.opacity = '1'
+  body.style.overflow = 'hidden'
+  // 先让浏览器记住初始高度，再开始过渡
+  void body.offsetHeight
+  body.style.transition = `height ${duration}ms ease, opacity ${duration}ms ease`
+  body.style.height = '0px'
+  body.style.opacity = '0'
+  suppressScrollButtonDuringAnimation()
+
+  const started = performance.now()
+  const ease = (t: number): number => 1 - (1 - t) ** 3
+
+  const step = (now: number): void => {
+    const t = Math.min(1, (now - started) / duration)
+    const eased = ease(t)
+    messages.scrollTop = startScroll + (targetScroll - startScroll) * eased
+    if (t < 1) {
+      requestAnimationFrame(step)
+      return
+    }
+
+    body.style.transition = ''
+    body.style.height = ''
+    body.style.opacity = ''
+    body.style.overflow = ''
+    block.classList.remove('is-collapsing')
+    delete block.dataset.animating
+  }
+
+  requestAnimationFrame(step)
+}
+
+function renderThinkingSegments(
+  group: HTMLElement,
+  container: HTMLElement,
+  segments: ThinkingSegment[],
+): void {
+  const fragment = document.createDocumentFragment()
+
+  for (const segment of segments) {
+    if (segment.kind === 'think') {
+      const text = segment as ThinkingTextSegment
+      const row = document.createElement('div')
+      row.className = 'think-text'
+      const icon = document.createElement('span')
+      icon.className = 'think-text-icon'
+      row.appendChild(icon)
+      const body = document.createElement('div')
+      body.className = 'think-text-body'
+      if (text.html) renderAiContent(body, text.text, text.html)
+      else renderApiMarkdown(body, text.text)
+      row.appendChild(body)
+      fragment.appendChild(row)
+      continue
+    }
+
+    if (segment.kind === 'search') {
+      const search = segment as ThinkingSearchSegment
+      if (search.info) setThinkingSegmentInfo(group, search.searchIndex, search.info)
+
+      const row = document.createElement('button')
+      row.type = 'button'
+      row.className = 'think-search'
+      const icon = document.createElement('span')
+      icon.className = 'search-icon'
+      icon.innerHTML = SEARCH_ICON
+      const label = document.createElement('span')
+      label.className = 'think-search-label'
+      label.textContent = t('quick.searchCount', { n: search.count })
+      row.append(icon, label, searchSiteLogos(thinkingSearchInfo(search).sources))
+      row.addEventListener('click', () => {
+        const info = getThinkingSegmentInfo(group, search.searchIndex) ?? thinkingSearchInfo(search)
+        toggleSearchPanel(group, info, search.searchIndex)
+      })
+      fragment.appendChild(row)
+      continue
+    }
+
+    const open = segment as ThinkingOpenSegment
+    const row = document.createElement('div')
+    row.className = 'think-open'
+    const icon = document.createElement('span')
+    icon.className = 'think-open-icon'
+    icon.innerHTML = OPEN_PAGE_ICON
+    const content = document.createElement('div')
+    content.className = 'think-open-content'
+    const label = document.createElement('div')
+    label.className = 'think-open-label'
+    label.textContent = t(
+      open.pages.length === 1 ? 'quick.thinkOpenPageOne' : 'quick.thinkOpenPages',
+      { n: open.pages.length },
+    )
+    const pages = document.createElement('div')
+    pages.className = 'think-open-pages'
+    for (const page of open.pages) {
+      if (page.url) {
+        const link = document.createElement('a')
+        link.className = 'think-open-page is-link'
+        link.href = page.url
+        link.textContent = page.title
+        link.addEventListener('click', (event) => {
+          event.preventDefault()
+          window.ds?.openExternal(page.url)
+        })
+        pages.appendChild(link)
+      } else {
+        const span = document.createElement('span')
+        span.className = 'think-open-page'
+        span.textContent = page.title
+        pages.appendChild(span)
+      }
+    }
+    content.append(label, pages)
+    row.append(icon, content)
+    fragment.appendChild(row)
+  }
+
+  container.replaceChildren(fragment)
+}
+
+function attachThinking(
+  group: HTMLElement,
+  thinking: ThinkingInfo,
+  options: { collapsed?: boolean } = {},
+): void {
+  groupThinkingInfo.set(group, thinking)
+  let block = group.querySelector('.think-block') as HTMLElement | null
+  if (!block) block = createThinkBlock(group, options.collapsed === true)
+
+  block.dataset.status = thinking.status
+  block.classList.toggle('is-thinking', thinking.status === 'thinking')
+
+  const title = block.querySelector('.think-title')
+  if (title) title.textContent = thinkingTitle(thinking)
+
+  const body = block.querySelector('.think-body') as HTMLElement | null
+  if (body) renderThinkingSegments(group, body, thinking.segments)
+}
+
+function markThinkingStopped(group: HTMLElement): void {
+  const block = group.querySelector('.think-block') as HTMLElement | null
+  if (!block) return
+  if (block.dataset.status !== 'thinking') return
+  const previous = groupThinkingInfo.get(group)
+  const thinking: ThinkingInfo = {
+    status: 'stopped',
+    segments: previous?.segments ?? [],
+    aggregateSearch: previous?.aggregateSearch,
+    elapsedSecs: previous?.elapsedSecs,
+  }
+  groupThinkingInfo.set(group, thinking)
+  block.dataset.status = 'stopped'
+  block.classList.remove('is-thinking')
+  const title = block.querySelector('.think-title')
+  if (title) title.textContent = thinkingTitle(thinking)
+}
+
+function markThinkingDone(group: HTMLElement): void {
+  const block = group.querySelector('.think-block') as HTMLElement | null
+  if (!block) return
+  if (block.dataset.status !== 'thinking') return
+  const previous = groupThinkingInfo.get(group)
+  if (!previous) return
+  const thinking: ThinkingInfo = { ...previous, status: 'done' }
+  groupThinkingInfo.set(group, thinking)
+  block.dataset.status = 'done'
+  block.classList.remove('is-thinking')
+  const title = block.querySelector('.think-title')
+  if (title) title.textContent = thinkingTitle(thinking)
+}
+
 /** 当前正在输出/刚结束的那条 AI 消息 */
 function currentAnswerGroup(): HTMLElement | null {
   const streaming = streamingBody?.closest('.msg-group') as HTMLElement | null
@@ -695,22 +1072,26 @@ function currentAnswerGroup(): HTMLElement | null {
 }
 
 function addSearchBottom(group: HTMLElement, info: SearchInfo): void {
-  if (group.querySelector('.search-pill')) return
   const actions = group.querySelector('.msg-actions:not(.right)') as HTMLElement | null
   if (!actions) return
 
   const sources = info.sources.slice().sort((a, b) => a.citeIndex - b.citeIndex)
-  const pill = document.createElement('button')
-  pill.type = 'button'
-  pill.className = 'search-pill'
+  const existing = group.querySelector('.search-pill') as HTMLButtonElement | null
+  const pill = existing ?? document.createElement('button')
+  if (!existing) {
+    pill.type = 'button'
+    pill.className = 'search-pill'
+    pill.addEventListener('click', () => {
+      const current = groupSearchInfo.get(group)
+      if (current) toggleSearchPanel(group, current)
+    })
+  }
+
   const count = document.createElement('span')
   count.textContent = t('quick.webCount', { n: info.count || sources.length })
-  pill.append(searchSiteLogos(sources), count)
-  pill.addEventListener('click', () => {
-    const current = groupSearchInfo.get(group)
-    if (current) toggleSearchPanel(group, current)
-  })
-  actions.appendChild(pill)
+  // 数量/图标可能在网页底部胶囊出现后更新，原地刷新即可
+  pill.replaceChildren(searchSiteLogos(sources), count)
+  if (!existing) actions.appendChild(pill)
 }
 
 /** 给一条 AI 回答挂上顶部搜索入口；showBottom=false 时底部胶囊等回答结束再补 */
@@ -760,18 +1141,105 @@ function searchHost(url: string): string {
   }
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+/** 结果栏占位：加载中 / 加载失败，整体在内容区域垂直居中 */
+function showSearchPlaceholder(wrap: HTMLElement): void {
+  searchPanelList.classList.add('is-placeholder')
+  searchPanelList.replaceChildren(wrap)
+  searchPanelList.scrollTop = 0
+}
+
+function renderSearchLoading(): void {
+  const wrap = document.createElement('div')
+  wrap.className = 'search-placeholder'
+  const text = document.createElement('div')
+  text.className = 'search-placeholder-text'
+  text.textContent = t('quick.searchLoading')
+  wrap.appendChild(text)
+  showSearchPlaceholder(wrap)
+}
+
+function renderSearchError(
+  group: HTMLElement,
+  answerIndex: number,
+  searchIndex?: number,
+): void {
+  const wrap = document.createElement('div')
+  wrap.className = 'search-placeholder'
+
+  const failed = document.createElement('div')
+  failed.className = 'search-placeholder-text'
+  failed.textContent = t('quick.searchLoadFailed')
+
+  const retry = document.createElement('button')
+  retry.type = 'button'
+  retry.className = 'search-retry'
+  retry.textContent = t('quick.searchRetry')
+  retry.addEventListener('click', () => {
+    if (!searchPanelOpen || activeSearchGroup !== group) return
+    void loadSearchDetails(group, answerIndex, searchIndex)
+  })
+
+  wrap.append(failed, retry)
+  showSearchPlaceholder(wrap)
+}
+
+/**
+ * 用户打开结果栏后才按需拉完整网页列表。
+ * 第一次立即请求，失败后每 500ms 再试，最多 6 次。
+ * 关闭结果栏或切换回答时令牌变化，旧循环直接退出。
+ *
+ * searchIndex 指定第几次搜索；不传表示底部聚合。
+ */
+async function loadSearchDetails(
+  group: HTMLElement,
+  answerIndex: number,
+  searchIndex?: number,
+): Promise<void> {
+  const token = ++searchDetailsToken
+  renderSearchLoading()
+
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (token !== searchDetailsToken || !searchPanelOpen || activeSearchGroup !== group) {
+      return
+    }
+
+    const info = await window.ds?.requestSearchDetails(answerIndex, searchIndex)
+
+    if (token !== searchDetailsToken || !searchPanelOpen || activeSearchGroup !== group) {
+      return
+    }
+
+    if (info && info.sources.some((source) => source.url)) {
+      if (searchIndex === undefined) groupSearchInfo.set(group, info)
+      else setThinkingSegmentInfo(group, searchIndex, info)
+      renderSearchPanel(info)
+      searchPanelList.scrollTop = 0
+      return
+    }
+
+    if (attempt < 5) await wait(500)
+  }
+
+  if (token !== searchDetailsToken || !searchPanelOpen || activeSearchGroup !== group) {
+    return
+  }
+  renderSearchError(group, answerIndex, searchIndex)
+}
+
 function renderSearchPanel(info: SearchInfo): void {
   const sources = info.sources.slice().sort((a, b) => a.citeIndex - b.citeIndex)
 
-  // 摘要先到、完整详情还没回来：先显示加载态，详情到了再填充
+  // 正常路径下打开结果栏时已经确认有完整数据；这里兜底防御
   if (!sources.some((source) => source.url)) {
-    const loading = document.createElement('div')
-    loading.className = 'search-loading'
-    loading.textContent = t('quick.searchLoading')
-    searchPanelList.replaceChildren(loading)
+    renderSearchLoading()
     return
   }
 
+  searchPanelList.classList.remove('is-placeholder')
   const fragment = document.createDocumentFragment()
 
   sources.forEach((source, index) => {
@@ -810,9 +1278,19 @@ function renderSearchPanel(info: SearchInfo): void {
   searchPanelList.replaceChildren(fragment)
 }
 
-function openSearchPanel(group: HTMLElement, info: SearchInfo): void {
+function openSearchPanel(
+  group: HTMLElement,
+  info: SearchInfo,
+  searchIndex?: number,
+): void {
   activeSearchGroup = group
-  renderSearchPanel(info)
+  activeSearchIndex = searchIndex
+  // 取消上一条回答可能还在进行的按需请求
+  searchDetailsToken += 1
+
+  const hasDetails = info.sources.some((source) => source.url)
+  if (hasDetails) renderSearchPanel(info)
+  else renderSearchLoading()
 
   if (!searchPanelOpen) {
     // 先固定左侧内容宽度，再显示结果栏；主进程随后加宽窗口时内容不会被拉伸
@@ -828,28 +1306,47 @@ function openSearchPanel(group: HTMLElement, info: SearchInfo): void {
   // 每次打开、或切换到另一条回答的搜索结果，都从顶部开始看
   searchPanelList.scrollTop = 0
   window.ds?.setSearchPanel(true)
+
+  if (!hasDetails) {
+    const answerIndex = groupAnswerIndex.get(group)
+    if (answerIndex !== undefined) {
+      void loadSearchDetails(group, answerIndex, searchIndex)
+    }
+  }
 }
 
 function closeSearchPanel(): void {
   if (!searchPanelOpen && searchPanel.hidden) return
+  // 关闭后不再继续重试拉取
+  searchDetailsToken += 1
   if (searchPanelOpen) {
     // 先把左侧内容宽度收回到 420，再移除结果栏并让主进程缩窗口
     app.style.width = `${Math.max(0, window.innerWidth - SEARCH_PANEL_WIDTH)}px`
   }
   searchPanelOpen = false
   activeSearchGroup = null
+  activeSearchIndex = undefined
   shell.classList.remove('search-open')
   searchPanel.hidden = true
+  searchPanelList.classList.remove('is-placeholder')
   searchPanelList.replaceChildren()
   window.ds?.setSearchPanel(false)
 }
 
-function toggleSearchPanel(group: HTMLElement, info: SearchInfo): void {
-  if (searchPanelOpen && activeSearchGroup === group) {
+function toggleSearchPanel(
+  group: HTMLElement,
+  info: SearchInfo,
+  searchIndex?: number,
+): void {
+  if (
+    searchPanelOpen &&
+    activeSearchGroup === group &&
+    activeSearchIndex === searchIndex
+  ) {
     closeSearchPanel()
     return
   }
-  openSearchPanel(group, info)
+  openSearchPanel(group, info, searchIndex)
 }
 
 searchPanelClose.addEventListener('click', closeSearchPanel)
@@ -871,6 +1368,7 @@ function buildMessageGroup(
   markdown?: string,
   messageKey?: string,
   search?: SearchInfo,
+  thinking?: ThinkingInfo,
 ): { group: HTMLElement; body: HTMLElement } {
   const group = document.createElement('div')
   // 用户提问 / AI 回答各自是一个独立的组，上下边距不同
@@ -893,7 +1391,18 @@ function buildMessageGroup(
   const actions = group.querySelector('.msg-actions') as HTMLElement
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
 
-  if (kind === 'ai' && search) attachSearchUi(group, search)
+  if (kind === 'ai' && thinking) {
+    // 历史对话里的思考块默认收起；搜索行在思考块内部，不再单独挂顶部气泡
+    attachThinking(group, thinking, { collapsed: true })
+    const aggregate = thinking.aggregateSearch ?? aggregateFromThinking(thinking)
+    if (aggregate) {
+      const info = thinkingSearchInfo(aggregate)
+      groupSearchInfo.set(group, info)
+      addSearchBottom(group, info)
+    }
+  } else if (kind === 'ai' && search) {
+    attachSearchUi(group, search)
+  }
 
   return { group, body }
 }
@@ -913,11 +1422,40 @@ function appendMessage(
   markdown?: string,
   messageKey?: string,
   search?: SearchInfo,
+  thinking?: ThinkingInfo,
 ): HTMLElement {
-  const { group, body } = buildMessageGroup(kind, text, html, markdown, messageKey, search)
+  const { group, body } = buildMessageGroup(
+    kind,
+    text,
+    html,
+    markdown,
+    messageKey,
+    search,
+    thinking,
+  )
   messagesInner.appendChild(group)
   updateScrollButton()
   return body
+}
+
+/**
+ * 拿到当前正在生成的回答组；还没有就创建一个空组。
+ * 深度思考、搜索摘要、正文谁先到都能落在同一个组里。
+ */
+function ensureStreamingAnswerGroup(): { group: HTMLElement; body: HTMLElement } | null {
+  let group = streamingBody?.closest('.msg-group') as HTMLElement | null
+  if (!group) {
+    removeThinking()
+    const body = appendMessage('ai', '')
+    streamingBody = body
+    setStreamingState(body, true)
+    group = body.closest('.msg-group')
+  }
+  if (!group) return null
+  const body =
+    (group.querySelector('.body') as HTMLElement | null) || streamingBody || null
+  if (!body) return null
+  return { group, body }
 }
 
 /**
@@ -939,6 +1477,7 @@ function prependMessages(history: HistoryMessage[]): void {
       message.markdown,
       undefined,
       message.search,
+      message.thinking,
     )
     fragment.appendChild(group)
   }
@@ -961,6 +1500,7 @@ function prependOneHistoryMessage(message: HistoryMessage): void {
     message.markdown,
     message.key,
     message.search,
+    message.thinking,
   )
   messagesInner.insertBefore(group, messagesInner.firstChild)
 }
@@ -993,6 +1533,7 @@ function renderApiHistoryInitial(
       message.markdown,
       message.key,
       message.search,
+      message.thinking,
     )
   }
 
@@ -1275,14 +1816,62 @@ function submit(): void {
 window.ds?.onQuickEvent((event: QuickEvent) => {
   switch (event.type) {
     case 'answer-update': {
-      removeThinking()
-      if (streamingBody) {
-        renderAiContent(streamingBody, event.text, event.html)
-      } else {
-        streamingBody = appendMessage('ai', event.text, event.html)
-        setStreamingState(streamingBody, true)
+      if (!streamingBody) {
+        const ensured = ensureStreamingAnswerGroup()
+        if (!ensured) break
+        streamingBody = ensured.body
       }
+      removeThinking()
+
+      const group = streamingBody.closest('.msg-group') as HTMLElement | null
+      const bodyWasEmpty = !(streamingBody.textContent || '').trim()
+      renderAiContent(streamingBody, event.text, event.html)
+
+      if (bodyWasEmpty && group?.querySelector('.think-block')) {
+        // 正文开始：思考标题立即切成「已思考…」，并把正文第一行滚到顶部
+        markThinkingDone(group)
+        const scrollBody = streamingBody
+        requestAnimationFrame(() => {
+          // answer-done 可能在同一帧到达，消息已经被清掉
+          if (scrollBody.isConnected) alignAnswerBodyToTop(scrollBody)
+        })
+      }
+
       // 设计稿：生成过程中不自动滚动，只更新「滚动到底部」按钮
+      updateScrollButton()
+      break
+    }
+
+    case 'answer-thinking': {
+      let group = streamingBody?.closest('.msg-group') as HTMLElement | null
+      if (!group && busy) {
+        const ensured = ensureStreamingAnswerGroup()
+        group = ensured?.group ?? null
+      }
+      if (!group) group = currentAnswerGroup()
+      if (!group) break
+
+      if (typeof event.answerIndex === 'number') {
+        groupAnswerIndex.set(group, event.answerIndex)
+      }
+
+      attachThinking(group, event.thinking, { collapsed: false })
+
+      const aggregate =
+        event.thinking.aggregateSearch ?? aggregateFromThinking(event.thinking)
+      if (aggregate) {
+        const existing = groupSearchInfo.get(group)
+        const existingHasDetails =
+          !!existing && existing.sources.some((source) => source.url)
+        // 已经拿到完整详情就不要被摘要覆盖
+        if (!existingHasDetails) {
+          const info = thinkingSearchInfo(aggregate)
+          groupSearchInfo.set(group, info)
+          // 已经挂出胶囊时，随着网页真实数量更新摘要
+          if (group.querySelector('.search-pill')) addSearchBottom(group, info)
+        }
+        if (!busy) completeSearchBottom(group)
+      }
       updateScrollButton()
       break
     }
@@ -1290,14 +1879,18 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'answer-search-summary': {
       let group = streamingBody?.closest('.msg-group') as HTMLElement | null
       if (!group && busy) {
-        removeThinking()
-        const body = appendMessage('ai', '')
-        streamingBody = body
-        setStreamingState(body, true)
-        group = body.closest('.msg-group')
+        const ensured = ensureStreamingAnswerGroup()
+        group = ensured?.group ?? null
       }
       if (!group) group = currentAnswerGroup()
       if (!group) break
+
+      if (typeof event.answerIndex === 'number') {
+        groupAnswerIndex.set(group, event.answerIndex)
+      }
+
+      // 开了深度思考时搜索气泡在思考块里，不再挂顶部搜索气泡
+      if (group.querySelector('.think-block')) break
 
       const existing = groupSearchInfo.get(group)
       // 详情已经先到了就不要被摘要覆盖
@@ -1307,34 +1900,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       groupSearchInfo.set(group, info)
       if (!group.querySelector('.search-top')) attachSearchUi(group, info, false)
       if (!busy) completeSearchBottom(group)
-      if (searchPanelOpen && activeSearchGroup === group) renderSearchPanel(info)
-      break
-    }
-
-    case 'answer-search': {
-      let group = streamingBody?.closest('.msg-group') as HTMLElement | null
-      if (!group && busy && event.search && event.search.sources.length > 0) {
-        removeThinking()
-        const body = appendMessage('ai', '')
-        streamingBody = body
-        setStreamingState(body, true)
-        group = body.closest('.msg-group')
-      }
-      if (!group) group = currentAnswerGroup()
-      if (!group) break
-
-      if (event.search && event.search.sources.length > 0) {
-        // 完整详情回来：更新弹框数据；顶部气泡已经在摘要阶段建好
-        groupSearchInfo.set(group, event.search)
-        if (!group.querySelector('.search-top')) attachSearchUi(group, event.search, false)
-        if (!busy) completeSearchBottom(group)
-        if (searchPanelOpen && activeSearchGroup === group) {
-          renderSearchPanel(event.search)
-        }
-      } else {
-        removeSearchUi(group)
-        if (activeSearchGroup === group) closeSearchPanel()
-      }
+      // 结果栏的完整数据等用户点击入口时再按需拉取，这里不动面板内容
       break
     }
 
@@ -1342,6 +1908,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       removeThinking()
       const finishedGroup = streamingBody?.closest('.msg-group') as HTMLElement | null
       if (finishedGroup) {
+        markThinkingDone(finishedGroup)
         completeSearchBottom(finishedGroup)
         finishedGroup.classList.remove('is-streaming')
       }
@@ -1377,6 +1944,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       removeThinking()
       const stoppedGroup = streamingBody?.closest('.msg-group') as HTMLElement | null
       if (stoppedGroup) {
+        markThinkingStopped(stoppedGroup)
         completeSearchBottom(stoppedGroup)
         stoppedGroup.classList.remove('is-streaming')
       }
@@ -1507,6 +2075,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
             message.markdown,
             message.key,
             message.search,
+            message.thinking,
           )
         }
         historyHasOlder = event.hasOlder

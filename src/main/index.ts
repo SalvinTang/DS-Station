@@ -9,8 +9,10 @@ import type {
   HotkeyUpdateResult,
   QuickMode,
   QuickSubmitPayload,
+  SearchInfo,
   SettingsSnapshot,
   ThemeSetting,
+  ThinkingInfo,
 } from '../shared/types'
 import { setQuitting } from './app-state'
 import { writeDomReport } from './deepseek/inspector'
@@ -486,6 +488,37 @@ function registerIpcHandlers(): void {
     quickWindow?.setSearchPanel(open === true)
   })
 
+  /*
+   * 搜索详情按需拉取：用户打开结果栏时才调用。
+   * 只拉一次，重试节奏由快捷窗口控制；页面/会话已经切走的结果直接作废。
+   */
+  ipcMain.handle(
+    'ds:search-details',
+    async (_event, answerIndex: unknown, searchIndex: unknown) => {
+      if (
+        typeof answerIndex !== 'number' ||
+        !Number.isInteger(answerIndex) ||
+        answerIndex < 0 ||
+        (searchIndex !== undefined &&
+          (typeof searchIndex !== 'number' ||
+            !Number.isInteger(searchIndex) ||
+            searchIndex < 0)) ||
+        !mainWindow
+      ) {
+        return null
+      }
+
+      const epoch = quickViewEpoch
+      const page = new DeepSeekPage(mainWindow.pageView)
+      const info: SearchInfo | null = await page.readCurrentSearchInfo(
+        answerIndex,
+        searchIndex as number | undefined,
+      )
+      if (epoch !== quickViewEpoch) return null
+      return info
+    },
+  )
+
   ipcMain.on('ds:quick-new-chat', () => void startNewChatOnPage())
 
   ipcMain.on('ds:quick-expand', () => {
@@ -698,6 +731,15 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
       await delay(300)
     }
 
+    /*
+     * 提前装好请求头捕获钩子。
+     * 搜索详情改成用户打开结果栏时才拉，那时页面可能已经空闲、不再发
+     * 带 authorization 的请求；必须在发送前先把钩子挂上，让网页自己的
+     * 发消息请求把请求头缓存下来。放在新对话/切历史之后，避免页面
+     * 导航把钩子冲掉。
+     */
+    await page.installApiHeaderHook()
+
     let typed = false
     for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
       typed = await page.setComposerText(payload.text)
@@ -736,34 +778,121 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
      */
     let summarySent = false
     let stopSummaryWatch = false
-    const summaryWatcher = payload.smartSearch
-      ? (async () => {
-          while (
-            !stopSummaryWatch &&
-            !token.cancelled &&
-            viewEpoch === quickViewEpoch &&
-            !summarySent
-          ) {
-            const summary = await page.readCurrentSearchSummary(baseline.length)
-            if (summary) {
-              summarySent = true
-              quick.sendEvent({ type: 'answer-search-summary', summary })
-
-              // 完整网页列表后台加载，不阻塞回答正文
-              void (async () => {
-                for (let attempt = 0; attempt < 6; attempt += 1) {
-                  if (token.cancelled || viewEpoch !== quickViewEpoch) return
-                  const info = await page.readCurrentSearchInfo(baseline.length)
-                  if (info) {
-                    quick.sendEvent({ type: 'answer-search', search: info })
-                    return
-                  }
-                  await delay(400)
-                }
-              })()
-              return
+    // 开了深度思考时，搜索气泡在思考块内部，由 thinking 事件一起带过去；
+    // 只有「只搜索、不深度思考」才走原来的顶部搜索气泡。
+    const summaryWatcher =
+      payload.smartSearch && !payload.deepThink
+        ? (async () => {
+            while (
+              !stopSummaryWatch &&
+              !token.cancelled &&
+              viewEpoch === quickViewEpoch &&
+              !summarySent
+            ) {
+              const summary = await page.readCurrentSearchSummary(baseline.length)
+              if (summary) {
+                summarySent = true
+                // 只推摘要；完整网页列表等用户打开结果栏时再按需拉取
+                quick.sendEvent({
+                  type: 'answer-search-summary',
+                  summary,
+                  answerIndex: baseline.length,
+                })
+                return
+              }
+              await delay(180)
             }
-            await delay(180)
+          })()
+        : Promise.resolve()
+
+    /*
+     * 深度思考增量：按网页折叠区里的片段顺序推 THINK 正文、
+     * 夹杂的搜索行和「浏览 N 个页面」；节流 300ms，内容不变不推。
+     */
+    let stopThinkingWatch = false
+    let lastThinkingJson = ''
+    let lastThinking: ThinkingInfo | null = null
+    let knownThinkingElapsed: number | undefined
+    let thinkingElapsedPromise: Promise<number | null> | null = null
+    let thinkingStartedAt: number | undefined
+    let answerStartedAt: number | undefined
+
+    const sendThinking = (thinking: ThinkingInfo): void => {
+      const json = JSON.stringify(thinking)
+      if (json === lastThinkingJson) return
+      lastThinkingJson = json
+      quick.sendEvent({
+        type: 'answer-thinking',
+        thinking,
+        answerIndex: baseline.length,
+      })
+    }
+
+    /*
+     * 网页标题行有时不会马上带出「用时 N 秒」，用接口里的
+     * THINK.elapsed_secs 补一次；拿到后所有后续 thinking 事件都带上它。
+     */
+    const ensureThinkingElapsed = async (): Promise<void> => {
+      if (!payload.deepThink || knownThinkingElapsed !== undefined) return
+      if (!thinkingElapsedPromise) {
+        thinkingElapsedPromise = (async () => {
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            if (viewEpoch !== quickViewEpoch) return null
+            const elapsed = await page.readThinkingElapsed(baseline.length)
+            if (elapsed !== null && elapsed > 0) return elapsed
+            await delay(250)
+          }
+          return null
+        })()
+      }
+
+      let elapsed = await thinkingElapsedPromise
+      thinkingElapsedPromise = null
+      if (viewEpoch !== quickViewEpoch) return
+
+      // 接口还没准备好时用本地时间兜底：从第一段思考出现到正文开始
+      if (elapsed === null && thinkingStartedAt !== undefined) {
+        const end = answerStartedAt ?? Date.now()
+        elapsed = Math.max(1, Math.round((end - thinkingStartedAt) / 1000))
+      }
+      if (elapsed === null) return
+
+      knownThinkingElapsed = elapsed
+      const latest = await page.readCurrentThinking(baseline.length)
+      const base = latest ?? lastThinking
+      if (!base) return
+      sendThinking({
+        ...base,
+        status: base.status === 'stopped' ? 'stopped' : 'done',
+        elapsedSecs: elapsed,
+      })
+    }
+
+    const thinkingWatcher = payload.deepThink
+      ? (async () => {
+          while (!stopThinkingWatch && !token.cancelled && viewEpoch === quickViewEpoch) {
+            const thinking = await page.readCurrentThinking(baseline.length)
+            if (thinking) {
+              lastThinking = thinking
+              if (thinkingStartedAt === undefined && thinking.status !== 'stopped') {
+                thinkingStartedAt = Date.now()
+              }
+              if (
+                knownThinkingElapsed !== undefined &&
+                thinking.status === 'done' &&
+                thinking.elapsedSecs === undefined
+              ) {
+                thinking.elapsedSecs = knownThinkingElapsed
+              }
+              if (thinking.elapsedSecs && thinking.elapsedSecs > 0) {
+                knownThinkingElapsed = thinking.elapsedSecs
+              }
+              sendThinking(thinking)
+              if (thinking.status === 'done' && thinking.elapsedSecs === undefined) {
+                void ensureThinkingElapsed()
+              }
+            }
+            await delay(300)
           }
         })()
       : Promise.resolve()
@@ -771,6 +900,11 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     const appeared = await page.waitForAnswerChange(baseline, 45000, token)
     if (token.cancelled) return
     if (!appeared) throw new Error('等不到新的回答')
+    answerStartedAt = Date.now()
+
+    // 正文开始前先补到最终用时，这样正文第一行出现时标题已经是
+    //「已思考（用时 N 秒）」，而不是先显示无时间的「已思考」。
+    if (payload.deepThink) await ensureThinkingElapsed()
 
     const got = await page.streamLastAnswer(
       (text, html) => {
@@ -781,10 +915,25 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     )
 
     stopSummaryWatch = true
-    await summaryWatcher
+    stopThinkingWatch = true
+    await Promise.all([summaryWatcher, thinkingWatcher])
 
     if (token.cancelled) return
     if (!got) throw new Error('没有读到回答')
+
+    // 回答结束时最后确认一次思考状态和用时
+    if (payload.deepThink && viewEpoch === quickViewEpoch) {
+      const finalThinking = await page.readCurrentThinking(baseline.length)
+      if (finalThinking) {
+        if (knownThinkingElapsed !== undefined && !finalThinking.elapsedSecs) {
+          finalThinking.elapsedSecs = knownThinkingElapsed
+        }
+        sendThinking({
+          ...finalThinking,
+          status: finalThinking.status === 'thinking' ? 'done' : finalThinking.status,
+        })
+      }
+    }
   } catch (err) {
     // 用户点了停止：轮询提前退出，这不是错误，也不该再推 answer-done
     if (token.cancelled) return
@@ -2063,7 +2212,10 @@ function runSearchSelfCheck(win: MainWindow | null, quick: QuickWindow | null): 
     )
 
     if (liveSearch) {
-      // 模拟实时回答：摘要先到 → 正文 → 完整详情 → 回答结束
+      const answers = await page.listAnswers()
+      const answerIndex = Math.max(0, answers.length - 1)
+
+      // 模拟实时回答：摘要先到 → 正文 → 打开结果栏时按需拉详情
       quick.sendEvent({ type: 'answer-start' })
       quick.sendEvent({
         type: 'answer-search-summary',
@@ -2071,6 +2223,7 @@ function runSearchSelfCheck(win: MainWindow | null, quick: QuickWindow | null): 
           count: liveSearch.count,
           icons: liveSearch.sources.slice(0, 4).map((source) => source.siteIcon),
         },
+        answerIndex,
       })
       await delay(400)
 
@@ -2091,8 +2244,6 @@ function runSearchSelfCheck(win: MainWindow | null, quick: QuickWindow | null): 
         html: '<p>测试回答内容</p>',
       })
       await delay(500)
-      quick.sendEvent({ type: 'answer-search', search: liveSearch })
-      await delay(400)
 
       const afterText = await run<Record<string, unknown>>(`(() => {
         const groups = [...document.querySelectorAll('.msg-group-ai')];
@@ -2103,14 +2254,15 @@ function runSearchSelfCheck(win: MainWindow | null, quick: QuickWindow | null): 
           body: group?.querySelector('.body')?.innerText ?? null,
         };
       })()`)
-      console.log('[搜索测试] 摘要+正文+详情:', JSON.stringify(afterText))
+      console.log('[搜索测试] 摘要+正文:', JSON.stringify(afterText))
 
       await run(`(() => {
         const groups = [...document.querySelectorAll('.msg-group-ai')];
         groups[groups.length - 1]?.querySelector('.search-top')?.click();
         return true;
       })()`)
-      await delay(500)
+      // 打开结果栏后才会按需请求完整列表，多等一会儿
+      await delay(1500)
       console.log(
         '[搜索测试] 实时搜索面板:',
         JSON.stringify(
