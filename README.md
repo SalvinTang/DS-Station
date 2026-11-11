@@ -2,11 +2,11 @@
   <img src="build/icon.png" width="112" alt="DS Station 图标">
 </p>
 
-<h1 align="center">DS Station 🐳</h1>
+<h1 align="center">DS Station 🐬</h1>
 
 <p align="center">
   不用开浏览器，不用切网页<br>
-  按一下 <kbd>⌥</kbd><kbd>Space</kbd>，就能快速向ai提问。
+  按一下 <kbd>⌥</kbd><kbd>Space</kbd>，就能快速向DeepSeek提问。
 </p>
 
 
@@ -23,14 +23,14 @@
 
 ## 它是什么
 
-DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使用。
+可以快捷使用DeepSeek的悬浮小窗
 
-它**不需要 API Key**，用你自己的 DeepSeek 账号就行，
+**不需要 API Key**、**不需要付费**，在应用内登录你的 DeepSeek 就行了
 消息记录只保存在 DeepSeek 那边，和网页版完全同步，应用不会存储、分享、分析你的任何信息。
 
 ---
 
-## ⚡ 快捷窗口：把「问一句」的成本降到最低
+## ⚡ 快捷窗口：把「随手一问」的成本降到最低
 
 ### 一个键，它就出现 ⌥Space
 
@@ -38,7 +38,7 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 不抢桌面、不切 App、不需要先找到浏览器标签页。
 
 
-### 看着小，功能完整 ✨
+### 功能完整 ✨
 
 功能和网页端几乎一致
 
@@ -49,10 +49,29 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 
 ### 历史记录切换 📍
 
+<p align="center">
+  <img src="docs/images/DSS_Historical_records.gif" alt="DS Station 历史对话功能" width="480">
+</p>
 可以用面板中的「历史对话」随时切换到之前的任意对话。
+
+### 深度思考 📍
+
+<p align="center">
+  <img src="docs/images/DSS_Deep_thinking.gif" alt="DS Station 历史对话功能" width="480">
+</p>
+像在网页上一样查看思考的过程
+
+### 智能搜索 📍
+
+<p align="center">
+  <img src="docs/images/DSS_Intelligent_search.gif" alt="DS Station 历史对话功能" width="480">
+</p>
+可以详细查看信息来源渠道
 
 
 ---
+
+
 
 ## 🎛 其他
 
@@ -104,7 +123,7 @@ DS Station 把 DeepSeek 装进了快捷面板里，可以很方便的唤起使�
 
 本项目是个人开发的**非官方**客户端，与 DeepSeek 官方无关。
 
-它的工作方式是驱动你自己登录的网页版 —— 不破解、不绕过登录，也不批量调用接口。
+它的工作方式是驱动你自己登录的网页版 —— 不破解、不绕过登录。
 使用时仍需遵守 DeepSeek 的服务条款。
 
 如果你觉得它好用，请Star；遇到问题欢迎反馈。
