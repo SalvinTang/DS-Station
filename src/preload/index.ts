@@ -2,10 +2,12 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { Language } from '../shared/i18n'
 import type {
   DsApi,
+  GuideStep,
   QuickEvent,
   QuickMode,
   QuickSubmitPayload,
   ThemeSetting,
+  TrayAction,
 } from '../shared/types'
 
 /**
@@ -28,7 +30,6 @@ const api: DsApi = {
   setResetAfter: (minutes: number) => ipcRenderer.invoke('ds:set-reset-after', minutes),
   setLanguage: (language: Language) => ipcRenderer.invoke('ds:set-language', language),
   setTheme: (theme: ThemeSetting) => ipcRenderer.invoke('ds:set-theme', theme),
-  logout: () => ipcRenderer.invoke('ds:logout'),
 
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
   resizeQuickWindow: (height) => ipcRenderer.send('ds:quick-resize', height),
@@ -45,6 +46,19 @@ const api: DsApi = {
     ipcRenderer.invoke('ds:search-details', answerIndex, searchIndex),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),
+
+  guideNext: () => ipcRenderer.send('ds:guide-next'),
+  guideStart: () => ipcRenderer.send('ds:guide-start'),
+  onGuideStep: (callback: (step: GuideStep) => void) => {
+    ipcRenderer.on('ds:guide-step', (_sender, step: GuideStep) => callback(step))
+  },
+
+  getTrayState: () => ipcRenderer.invoke('ds:tray-state'),
+  trayAction: (action: TrayAction) => ipcRenderer.send('ds:tray-action', action),
+  hideTrayMenu: () => ipcRenderer.send('ds:tray-hide'),
+  onTrayShown: (callback: () => void) => {
+    ipcRenderer.on('ds:tray-shown', () => callback())
+  },
 
   beginWindowDrag: (screenX, screenY) =>
     ipcRenderer.send('ds:window-drag-start', screenX, screenY),

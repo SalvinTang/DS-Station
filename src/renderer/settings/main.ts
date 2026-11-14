@@ -44,13 +44,6 @@ const themeSelect = el<HTMLSelectElement>('theme')
 const versionEl = el('version')
 const statusEl = el('status')
 
-const logoutButton = el<HTMLButtonElement>('logout')
-const overlay = el('overlay')
-const confirmTitle = el('confirmTitle')
-const confirmDetail = el('confirmDetail')
-const cancelButton = el<HTMLButtonElement>('cancel')
-const confirmLogoutButton = el<HTMLButtonElement>('confirmLogout')
-
 // ── 时间选项（默认 10 分钟）────────────────────────────────────
 
 const RESET_CHOICES = [0, 5, 10, 30, 60, 120]
@@ -216,26 +209,6 @@ themeSelect.addEventListener('change', () => {
   void window.ds?.setTheme(themeSelect.value as ThemeSetting)
 })
 
-// ── 退出登录 ──────────────────────────────────────────────────
-
-logoutButton.addEventListener('click', () => {
-  overlay.hidden = false
-  confirmLogoutButton.focus()
-})
-
-cancelButton.addEventListener('click', () => {
-  overlay.hidden = true
-})
-
-confirmLogoutButton.addEventListener('click', () => {
-  overlay.hidden = true
-  void window.ds?.logout()
-})
-
-overlay.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') overlay.hidden = true
-})
-
 // ── 初始化 ────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
@@ -256,11 +229,6 @@ async function init(): Promise<void> {
   hintNewChat.textContent = t('settings.newChatShortcutHint')
   hintHistory.textContent = t('settings.historyShortcutHint')
   hintReset.textContent = t('settings.resetHint')
-  logoutButton.textContent = t('settings.logout')
-  confirmTitle.textContent = t('settings.logoutConfirm')
-  confirmDetail.textContent = t('settings.logoutDetail')
-  cancelButton.textContent = t('settings.cancel')
-  confirmLogoutButton.textContent = t('settings.logout')
 
   shortcutDisplays.hotkey = snapshot.hotkeyDisplay
   shortcutDisplays.newChat = snapshot.newChatShortcutDisplay

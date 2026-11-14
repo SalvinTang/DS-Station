@@ -92,6 +92,50 @@ export class DeepSeekPage {
     return (await this.loginState()) === 'logged-in'
   }
 
+  /**
+   * 读取 DeepSeek 当前账号的显示名称。
+   *
+   * 账号行在左侧栏底部：头像 img 的 src 以 static.deepseek.com/user-avatar 开头，
+   * 名称是同一行里第一个有文字的叶子 div。类名是哈希的，不能写死。
+   * 页面还没登录 / 侧栏没渲染 / 结构变了时返回 null，调用方用兜底文案。
+   */
+  async readAccountName(): Promise<string | null> {
+    return this.run<string | null>(`
+      const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+
+      const avatar = document.querySelector('img[src*="static.deepseek.com/user-avatar"]');
+      if (avatar) {
+        const row = avatar.closest('[tabindex="0"]') || avatar.parentElement?.parentElement;
+        if (row) {
+          const name = Array.from(row.querySelectorAll('div')).find(
+            (el) => el.children.length === 0 && !el.querySelector('svg') && clean(el.innerText || el.textContent),
+          );
+          const text = name ? clean(name.innerText || name.textContent) : '';
+          if (text) return text.slice(0, 80);
+        }
+      }
+
+      // 兜底：左下角、贴近视口底部的短文本叶子节点
+      const candidates = Array.from(document.querySelectorAll('div')).filter((el) => {
+        if (el.children.length > 0) return false;
+        const r = el.getBoundingClientRect();
+        const text = clean(el.innerText || el.textContent);
+        if (!text || text.length > 40) return false;
+        return (
+          r.left < 320 &&
+          r.top > window.innerHeight - 140 &&
+          r.width > 20 &&
+          r.width < 260 &&
+          r.height >= 14 &&
+          r.height <= 30
+        );
+      });
+      candidates.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+      const fallback = candidates[0] ? clean(candidates[0].innerText || candidates[0].textContent) : '';
+      return fallback ? fallback.slice(0, 80) : null;
+    `)
+  }
+
   /** 选择器自检：启动时跑，哪一项挂了立刻能看出来 */
   async selfCheck(): Promise<Record<SelectorKey, boolean> | null> {
     return this.run<Record<SelectorKey, boolean>>(`

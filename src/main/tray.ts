@@ -1,15 +1,5 @@
-import { Menu, Tray, app, nativeImage, type MenuItemConstructorOptions } from 'electron'
+import { Tray, app, nativeImage, type Rectangle } from 'electron'
 import trayTemplateIcon from '../../resources/trayTemplate.png?asset'
-import { translate, type MessageKey } from '../shared/i18n'
-import { currentLanguage } from './settings'
-import { openSettingsWindow } from './windows/settings-window'
-
-export interface TrayHandlers {
-  showMainWindow: () => void
-}
-
-let tray: Tray | null = null
-let handlers: TrayHandlers | null = null
 
 /**
  * 菜单栏常驻图标。
@@ -19,8 +9,17 @@ let handlers: TrayHandlers | null = null
  * 深色菜单栏画成白色。所以 Design/素材 里的黑白两张稿，
  * 运行时只需要一张（黑色那张），另一张是给设计对稿用的。
  *
+ * 点击图标不弹原生 NSMenu，而是由 TrayMenuWindow 自绘账号卡片和按钮。
  * tray 必须保存在模块作用域里，否则会被垃圾回收，图标随之消失。
  */
+
+export interface TrayHandlers {
+  onTrayClick: () => void
+}
+
+let tray: Tray | null = null
+let handlers: TrayHandlers | null = null
+
 export function createTray(next: TrayHandlers): void {
   if (tray) return
 
@@ -30,29 +29,17 @@ export function createTray(next: TrayHandlers): void {
 
   tray = new Tray(icon)
   tray.setToolTip(app.name)
-  refreshTrayMenu()
+  tray.on('click', () => handlers?.onTrayClick())
+  tray.on('right-click', () => handlers?.onTrayClick())
 }
 
-/** 语言切换后重建菜单（由 index.ts 的 rebuildMenu 调用） */
-export function refreshTrayMenu(): void {
-  if (!tray || !handlers) return
-  tray.setContextMenu(Menu.buildFromTemplate(buildTrayTemplate()))
+export function getTrayBounds(): Rectangle | null {
+  if (!tray || tray.isDestroyed()) return null
+  const bounds = tray.getBounds()
+  return bounds.width > 0 && bounds.height > 0 ? bounds : null
 }
 
-function buildTrayTemplate(): MenuItemConstructorOptions[] {
-  const lang = currentLanguage()
-  const t = (key: MessageKey, vars?: Record<string, string | number>): string =>
-    translate(lang, key, vars)
-
-  return [
-    { label: t('menu.settings'), click: () => openSettingsWindow() },
-    { label: t('menu.showMain'), click: () => handlers?.showMainWindow() },
-    { type: 'separator' },
-    { label: t('menu.quit', { app: app.name }), click: () => app.quit() },
-  ]
-}
-
-/** 开发自检（DS_TRAY_TEST=1）用：确认图标真的进了菜单栏、菜单项也对 */
+/** 开发自检（DS_TRAY_TEST=1）用：确认图标进了菜单栏、点击回调已挂上 */
 export function trayDebugState(): unknown {
   if (!tray) return { exists: false }
   return {
@@ -60,8 +47,7 @@ export function trayDebugState(): unknown {
     destroyed: tray.isDestroyed(),
     bounds: tray.getBounds(),
     expectedTooltip: app.name,
-    menu: buildTrayTemplate().map((item) =>
-      item.type === 'separator' ? '---' : item.label,
-    ),
+    customMenu: true,
+    hasClickHandler: !!handlers,
   }
 }

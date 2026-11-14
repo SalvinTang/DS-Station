@@ -3,6 +3,19 @@ import type { Language, ResolvedLanguage } from './i18n'
 /** 主题：跟随系统 / 浅色 / 深色 */
 export type ThemeSetting = 'system' | 'light' | 'dark'
 
+/** 功能引导的两个页面：1 欢迎 / 2 关联 DeepSeek */
+export type GuideStep = 1 | 2
+
+/** 状态栏弹出菜单需要的数据 */
+export interface TrayState {
+  loggedIn: boolean
+  accountName: string | null
+  version: string
+  messages: Record<string, string>
+}
+
+export type TrayAction = 'open-main' | 'logout' | 'settings' | 'quit' | 'connect'
+
 /** 快捷窗口的两种形态（设计稿：快捷窗口-无内容 / 快捷窗口-有内容） */
 export type QuickMode = 'empty' | 'content'
 
@@ -211,7 +224,6 @@ export interface DsApi {
   setResetAfter: (minutes: number) => Promise<void>
   setLanguage: (language: Language) => Promise<void>
   setTheme: (theme: ThemeSetting) => Promise<void>
-  logout: () => Promise<void>
 
   // ── 快捷窗口 ──────────────────────────────────────────────
 
@@ -265,6 +277,22 @@ export interface DsApi {
 
   /** 顶栏「扩大」：切到主窗口，关闭快捷窗口 */
   quickExpand: () => void
+
+  // ── 功能引导 ──────────────────────────────────────────────
+
+  /** 引导页 1 → 引导页 2 */
+  guideNext: () => void
+  /** 引导页 2 → DeepSeek 登录页（显示主窗口） */
+  guideStart: () => void
+  /** 主进程切换引导页时通知渲染层 */
+  onGuideStep: (callback: (step: GuideStep) => void) => void
+
+  // ── 状态栏菜单 ────────────────────────────────────────────
+
+  getTrayState: () => Promise<TrayState>
+  trayAction: (action: TrayAction) => void
+  hideTrayMenu: () => void
+  onTrayShown: (callback: () => void) => void
 
   // ── 窗口拖动（透明窗口下原生拖拽区不可靠，改为手动移动）──
 

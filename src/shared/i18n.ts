@@ -34,9 +34,6 @@ const zh = {
   'theme.light': '浅色',
   'theme.dark': '深色',
   'settings.version': '版本号',
-  'settings.logout': '退出登录',
-  'settings.logoutConfirm': '是否要退出登录？',
-  'settings.logoutDetail': '退出后需要重新登录 DeepSeek 账号。聊天记录存在 DeepSeek 那边，不会丢。',
   'settings.cancel': '取消',
 
   // ── 时间选项 ──
@@ -103,6 +100,33 @@ const zh = {
   'quick.error': '出错了',
   'quick.stop': '停止生成',
   'quick.continue': '继续生成',
+
+  // ── 功能引导 ──
+  'guide.welcome': '欢迎使用DS Station',
+  'guide.hotkeyPrefix': '任何位置使用快捷键',
+  'guide.hotkeySuffix': '就能唤出快捷面板。',
+  'guide.hotkeyHint': '可以在设置中修改快捷键',
+  'guide.next': '下一步',
+  'guide.linkTitle': '关联到DeepSeek',
+  'guide.privacyLabel': '隐私说明',
+  'guide.privacyAccount': '本应用不会主动泄露、保存、分享你的账号',
+  'guide.privacyChat': '本应用不会主动泄露、储存、分享你与ai的沟通记录',
+  'guide.privacyOfficial': '所有信息均在DeepSeek官方手上，本应用只做展示',
+  'guide.start': '开始',
+
+  // ── 状态栏菜单 ──
+  'tray.accountFallback': 'DeepSeek 账号',
+  'tray.linked': '已关联',
+  'tray.unlinked': '未关联',
+  'tray.connect': '立即连接',
+  'tray.openMain': '打开主窗口',
+  'tray.logout': '退出账号',
+  'tray.settings': '设置',
+  'tray.quit': '退出应用',
+  'tray.logoutTitle': '是否退出DeepSeek账号',
+  'tray.logoutDetail': '退出后你的登录信息会立即从本应用中删除。',
+  'tray.cancel': '取消',
+  'tray.confirmLogout': '退出',
 } as const
 
 export type MessageKey = keyof typeof zh
@@ -133,10 +157,6 @@ const en: Record<MessageKey, string> = {
   'theme.light': 'Light',
   'theme.dark': 'Dark',
   'settings.version': 'Version',
-  'settings.logout': 'Sign out',
-  'settings.logoutConfirm': 'Sign out?',
-  'settings.logoutDetail':
-    'You will need to sign in to DeepSeek again. Your chat history lives on DeepSeek and is not affected.',
   'settings.cancel': 'Cancel',
 
   'time.never': 'Never',
@@ -199,6 +219,31 @@ const en: Record<MessageKey, string> = {
   'quick.error': 'Something went wrong',
   'quick.stop': 'Stop generating',
   'quick.continue': 'Continue generating',
+
+  'guide.welcome': 'Welcome to DS Station',
+  'guide.hotkeyPrefix': 'Press',
+  'guide.hotkeySuffix': 'anywhere to open the quick panel.',
+  'guide.hotkeyHint': 'You can change this shortcut in Settings',
+  'guide.next': 'Next',
+  'guide.linkTitle': 'Connect to DeepSeek',
+  'guide.privacyLabel': 'Privacy',
+  'guide.privacyAccount': 'This app never leaks, stores, or shares your account.',
+  'guide.privacyChat': 'This app never leaks, stores, or shares your AI conversations.',
+  'guide.privacyOfficial': 'All data stays with DeepSeek. This app only displays it.',
+  'guide.start': 'Start',
+
+  'tray.accountFallback': 'DeepSeek account',
+  'tray.linked': 'Linked',
+  'tray.unlinked': 'Not linked',
+  'tray.connect': 'Connect now',
+  'tray.openMain': 'Open main window',
+  'tray.logout': 'Sign out',
+  'tray.settings': 'Settings',
+  'tray.quit': 'Quit',
+  'tray.logoutTitle': 'Sign out of DeepSeek?',
+  'tray.logoutDetail': 'Your sign-in will be removed from this app immediately.',
+  'tray.cancel': 'Cancel',
+  'tray.confirmLogout': 'Sign out',
 }
 
 const DICTIONARIES: Record<ResolvedLanguage, Record<MessageKey, string>> = { zh, en }

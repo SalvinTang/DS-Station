@@ -82,6 +82,40 @@ function findArtifact(build, since) {
   return null
 }
 
+/*
+ * 这些依赖只给 renderer 用，Vite 会把它们打进 quick-*.js。
+ * 它们现在在 devDependencies，electron-builder 不会打包 node_modules；
+ * 一旦主进程 / preload 引用到它们，运行时会缺包，而且构建期看不出来。
+ * 所以打包前扫一遍产物，尽早失败。
+ */
+const RENDERER_ONLY_DEPS = [
+  'highlight.js',
+  'katex',
+  'markdown-it',
+  'markdown-it-footnote',
+  'markdown-it-task-lists',
+  'markdown-it-texmath',
+]
+
+function assertNoRendererOnlyDepsInMain() {
+  for (const rel of ['out/main/index.js', 'out/preload/index.js']) {
+    let code
+    try {
+      code = readFileSync(join(ROOT, rel), 'utf8')
+    } catch {
+      continue
+    }
+    for (const dep of RENDERER_ONLY_DEPS) {
+      if (code.includes(`require("${dep}")`) || code.includes(`require('${dep}')`)) {
+        throw new Error(
+          `${rel} 引用了只给 renderer 用的依赖 ${dep}；` +
+            `它现在在 devDependencies，不会被 electron-builder 打包。`,
+        )
+      }
+    }
+  }
+}
+
 const packageVersion = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
 const previous = readBuildNumber()
 const next = skipBump ? previous : previous + 1
@@ -95,6 +129,7 @@ const startedAt = Date.now()
 
 try {
   run(process.execPath, ['node_modules/electron-vite/bin/electron-vite.js', 'build'])
+  assertNoRendererOnlyDepsInMain()
   /*
    * --publish never：仓库配置了 GitHub remote 后，electron-builder 会因为
    * CI 检测默认尝试上传 release，没有 GH_TOKEN 就直接失败。

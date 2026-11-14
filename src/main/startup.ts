@@ -1,5 +1,7 @@
 import { DeepSeekPage, delay, type LoginState } from './deepseek/page-driver'
 import { load, save } from './settings'
+import type { GuideWindow } from './windows/guide-window'
+import { GUIDE_STEP, type GuideStep } from './windows/guide-window'
 import type { MainWindow } from './windows/main-window'
 import type { QuickWindow } from './windows/quick-window'
 
@@ -7,12 +9,13 @@ import type { QuickWindow } from './windows/quick-window'
  * 启动时的登录门禁。
  *
  * 需求：
- *   1. 首次安装启动 → 显示主窗口；登录成功后主窗口消失、快捷窗口出现
+ *   1. 首次安装启动 → 显示引导页 1；下一步 → 引导页 2；开始 → DeepSeek 登录页
  *   2. 已登录状态下每次启动 → 只显示快捷窗口
+ *   3. 退出登录后 → 只显示引导页 2
  *
  * 判断永远以页面为准（URL + 输入框），settings 里的 knownLoggedIn
  * 只是一个「上次确认过」的提示：用它让老用户启动时秒开面板，
- * 再用页面复核，token 失效时自动退回主窗口。
+ * 再用页面复核，token 失效时退回引导页 2。
  */
 
 /** 启动时最多等这么久来判断登录状态 */
@@ -31,6 +34,7 @@ export class StartupFlow {
   constructor(
     private readonly win: MainWindow,
     private readonly quick: QuickWindow,
+    private readonly guide: GuideWindow,
   ) {}
 
   /** 启动门禁是否已经完成（这之前不响应 Dock 的 activate，避免主窗口提前冒出来） */
@@ -61,20 +65,21 @@ export class StartupFlow {
 
       const state = await this.detect(page)
       if (state === 'logged-in') {
+        save({ guide: { introSeen: true } })
         console.log('[启动] 复核通过，保持快捷窗口')
         return
       }
 
       if (state === 'unknown') {
-        // 页面没加载好而已，别因为一次网络波动就把用户踢回主窗口
+        // 页面没加载好而已，别因为一次网络波动就把用户踢回引导页
         console.log('[启动] 登录状态暂时确认不了（页面可能没加载完），保持快捷窗口')
         return
       }
 
-      console.log('[启动] 检测到已退出登录 → 切回主窗口')
+      console.log('[启动] 检测到已退出登录 → 显示引导页 2')
       this.loggedIn = false
-      save({ login: { knownLoggedIn: false } })
-      this.showMainThenHideQuick()
+      save({ login: { knownLoggedIn: false }, guide: { introSeen: true } })
+      this.showGuide(GUIDE_STEP.connect)
       this.watchLogin()
       return
     }
@@ -85,38 +90,45 @@ export class StartupFlow {
 
     if (state === 'logged-in') {
       this.loggedIn = true
-      save({ login: { knownLoggedIn: true } })
+      save({ login: { knownLoggedIn: true }, guide: { introSeen: true } })
+      this.guide.hide()
       this.quick.show()
       console.log('[启动] 已登录 → 只显示快捷窗口')
       return
     }
 
+    if (state === 'logged-out') {
+      this.showLoggedOutGuide()
+      this.watchLogin()
+      console.log('[启动] 未登录 → 显示功能引导')
+      return
+    }
+
     this.showMain()
     this.watchLogin()
-    console.log(
-      state === 'logged-out'
-        ? '[启动] 未登录 → 显示主窗口，登录成功后切到快捷窗口'
-        : '[启动] 登录状态未知 → 显示主窗口',
-    )
+    console.log('[启动] 登录状态未知 → 显示主窗口')
   }
 
-  /** 登录成功后的统一处理：主窗口消失、快捷窗口出现 */
+  /** 登录成功后的统一处理：引导页 / 主窗口消失、快捷窗口出现 */
   onLoginConfirmed(): void {
     this.stopWatching()
     this.loggedIn = true
-    save({ login: { knownLoggedIn: true } })
+    save({ login: { knownLoggedIn: true }, guide: { introSeen: true } })
 
-    // 先亮面板再收主窗口：反过来会让 App 在中间瞬间失去 key window
+    // 先亮面板再收其他窗口：反过来会让 App 在中间瞬间失去 key window
+    this.guide.hide()
     this.quick.show()
     this.win.window.hide()
     console.log('[启动] 登录完成 → 主窗口收起，快捷窗口出现')
   }
 
-  /** 退出登录：立刻禁止快捷键唤出面板，等用户重新登录 */
+  /** 退出登录：立刻禁止快捷键唤出面板，并显示引导页 2 */
   onLoggedOut(): void {
     this.loggedIn = false
     this.stopWatching()
-    console.log('[启动] 已退出登录 → 登录前快捷键不响应')
+    save({ login: { knownLoggedIn: false }, guide: { introSeen: true } })
+    this.showGuide(GUIDE_STEP.connect)
+    console.log('[启动] 已退出登录 → 显示引导页 2，登录前快捷键不响应')
   }
 
   /** 停在登录页时监听「登录完成」，启动流程和退出登录后都会用到 */
@@ -151,6 +163,18 @@ export class StartupFlow {
 
   // ── 内部 ──────────────────────────────────────────────────────
 
+  private showLoggedOutGuide(): void {
+    const seen = load().guide.introSeen
+    if (!seen) save({ guide: { introSeen: true } })
+    this.showGuide(seen ? GUIDE_STEP.connect : GUIDE_STEP.intro)
+  }
+
+  private showGuide(step: GuideStep): void {
+    this.guide.show(step)
+    this.quick.hide()
+    this.win.window.hide()
+  }
+
   private async detect(page: DeepSeekPage): Promise<LoginState> {
     const deadline = Date.now() + STARTUP_TIMEOUT_MS
 
@@ -166,11 +190,5 @@ export class StartupFlow {
 
   private showMain(): void {
     this.win.show()
-  }
-
-  /** 顺序不能反：quick.hide() 在「主窗口不可见」时会顺手把整个 App 隐藏 */
-  private showMainThenHideQuick(): void {
-    this.showMain()
-    this.quick.hide()
   }
 }

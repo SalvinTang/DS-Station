@@ -55,6 +55,10 @@ export interface Settings {
   login: {
     knownLoggedIn: boolean
   }
+  /** 功能引导是否已经看过第一页；退出登录后只显示第二页 */
+  guide: {
+    introSeen: boolean
+  }
 }
 // 注：构建号不属于用户配置 —— 它随产物走，存在 build-number.json 里，
 // 构建时由 define 注入。老版本 settings.json 里的 build 字段会被忽略。
@@ -74,6 +78,7 @@ const DEFAULTS: Settings = {
   language: 'system',
   theme: 'system',
   login: { knownLoggedIn: false },
+  guide: { introSeen: false },
 }
 
 /**

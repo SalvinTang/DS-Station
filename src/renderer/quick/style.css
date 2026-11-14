@@ -608,6 +608,22 @@ body {
   font-size: 1.05em;
 }
 
+/*
+ * KaTeX 只输出 MathML 后不再自带 .katex-display 包裹层。
+ * texmath 的块级公式外面是 <eqn>，fence 公式外面是 .md-math-display；
+ * 这两条规则保证块级公式仍然居中、有上下间距。
+ */
+.md eqn {
+  display: flex;
+  justify-content: center;
+  margin: 10px 0;
+}
+
+.md math[display='block'] {
+  width: fit-content;
+  margin-inline: auto;
+}
+
 /* 引用角标：数字胶囊 / 来源图标 + 名称 */
 .md .md-cite {
   display: inline-flex;

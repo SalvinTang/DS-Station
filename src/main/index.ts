@@ -1,8 +1,8 @@
-import { app, clipboard, ipcMain, nativeTheme, shell } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
-import { translate, type Language } from '../shared/i18n'
+import { translate, type Language, type MessageKey } from '../shared/i18n'
 import type {
   HistoryEntry,
   HistoryMessage,
@@ -13,6 +13,8 @@ import type {
   SettingsSnapshot,
   ThemeSetting,
   ThinkingInfo,
+  TrayAction,
+  TrayState,
 } from '../shared/types'
 import { setQuitting } from './app-state'
 import { writeDomReport } from './deepseek/inspector'
@@ -28,7 +30,8 @@ import {
   unregisterAllHotkeys,
 } from './shortcut'
 import { StartupFlow } from './startup'
-import { createTray, refreshTrayMenu, trayDebugState } from './tray'
+import { createTray, trayDebugState } from './tray'
+import { GUIDE_STEP, GuideWindow } from './windows/guide-window'
 import { MainWindow } from './windows/main-window'
 import { QuickWindow } from './windows/quick-window'
 import {
@@ -36,6 +39,7 @@ import {
   getSettingsWindow,
   openSettingsWindow,
 } from './windows/settings-window'
+import { TrayMenuWindow } from './windows/tray-menu-window'
 
 // 必须在 ready 之前设置：它决定 userData 落在哪个目录
 app.setName('DS Station')
@@ -111,7 +115,12 @@ console.log(`[语言] 系统首选=${app.getPreferredSystemLanguages?.()[0] ?? '
 
 let mainWindow: MainWindow | null = null
 let quickWindow: QuickWindow | null = null
+let guideWindow: GuideWindow | null = null
+let trayMenuWindow: TrayMenuWindow | null = null
 let startupFlow: StartupFlow | null = null
+
+/** DeepSeek 左侧栏底部的账号显示名；失败时菜单里用兜底文案 */
+let cachedAccountName: string | null = null
 
 /**
  * 当前这一轮生成的取消令牌。
@@ -130,6 +139,37 @@ const toggleQuickWindow = (): void => {
     return
   }
   quickWindow?.toggle()
+}
+
+/** 四段版本号：package.json 前三段 + 构建号 */
+function fullVersion(): string {
+  return `${app.getVersion()}.${String(__BUILD_NUMBER__).padStart(3, '0')}`
+}
+
+/**
+ * 从 DeepSeek 左侧栏底部读取账号显示名。
+ * 页面没登录、侧栏没渲染或结构变了都拿不到，这时保留上一次的值，
+ * 托盘菜单会用「DeepSeek 账号」兜底。
+ */
+async function refreshAccountName(): Promise<void> {
+  if (!mainWindow || !startupFlow?.isLoggedIn) return
+  const page = new DeepSeekPage(mainWindow.pageView)
+  const name = await Promise.race([
+    page.readAccountName(),
+    delay(700).then(() => null),
+  ])
+  if (name) cachedAccountName = name
+}
+
+/** 点击状态栏图标：已登录弹出菜单，未登录直接显示引导页 2 */
+async function openTrayMenu(): Promise<void> {
+  if (!startupFlow?.isSettled) return
+  if (trayMenuWindow?.isVisible) {
+    trayMenuWindow.hide()
+    return
+  }
+  if (startupFlow.isLoggedIn && !cachedAccountName) await refreshAccountName()
+  trayMenuWindow?.show()
 }
 
 // 单实例锁：双开会让两个进程争抢同一份 persist:deepseek 分区，
@@ -177,13 +217,23 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
 
-    createTray({ showMainWindow: () => mainWindow?.show() })
+    // 功能引导与状态栏菜单窗口都提前建好，第一次显示不用等加载
+    guideWindow = new GuideWindow()
+    trayMenuWindow = new TrayMenuWindow()
+
+    createTray({ onTrayClick: () => void openTrayMenu() })
 
     // 快捷窗口纯自绘、开销可忽略，直接建好 —— 免得第一次按快捷键要等
     quickWindow = new QuickWindow(
-      () => mainWindow?.isVisible ?? false,
+      () =>
+        (mainWindow?.isVisible ?? false) ||
+        (guideWindow?.isVisible ?? false) ||
+        !!getSettingsWindow() ||
+        (trayMenuWindow?.isVisible ?? false),
       () => void startNewChatOnPage(),
     )
+
+    nativeTheme.on('updated', () => guideWindow?.syncTheme())
 
     /*
      * 快捷窗口内的本地快捷键。
@@ -227,7 +277,7 @@ if (!app.requestSingleInstanceLock()) {
 
     // 登录门禁：未登录显示主窗口，已登录只显示快捷窗口。
     // 主窗口创建时是隐藏的（MainWindow 里 show: false），这里决定要不要露出来。
-    startupFlow = new StartupFlow(mainWindow, quickWindow)
+    startupFlow = new StartupFlow(mainWindow, quickWindow, guideWindow)
     void startupFlow.start()
 
     // 启动门禁完成前不响应 activate，否则 macOS 启动时补发的 activate
@@ -361,6 +411,16 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_MD_UI_TEST === '1') {
       runMarkdownUiSelfCheck(quickWindow)
     }
+
+    // 功能引导自检：截图 → 下一步 → 截图 → 开始 → 检查主窗口/登录页
+    if (process.env.DS_GUIDE_TEST === '1') {
+      runGuideSelfCheck(guideWindow, mainWindow)
+    }
+
+    // 状态栏菜单自检：打开自绘菜单，截图并检查账号名/版本号
+    if (process.env.DS_TRAY_MENU_TEST === '1') {
+      void runTrayMenuSelfCheck(trayMenuWindow)
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -373,7 +433,6 @@ if (!app.requestSingleInstanceLock()) {
 // ── 菜单 ────────────────────────────────────────────────────────
 
 function rebuildMenu(): void {
-  refreshTrayMenu()
   buildAppMenu({
     showMainWindow: () => mainWindow?.show(),
     toggleQuickWindow,
@@ -410,6 +469,35 @@ function registerIpcHandlers(): void {
   ipcMain.handle('ds:get-version', () => app.getVersion())
   ipcMain.handle('ds:get-messages', () => messages())
 
+  // ── 功能引导 / 状态栏菜单 ─────────────────────────────────
+
+  ipcMain.on('ds:guide-next', () => guideWindow?.setStep(GUIDE_STEP.connect))
+  ipcMain.on('ds:guide-start', () => void handleGuideStart())
+
+  ipcMain.handle(
+    'ds:tray-state',
+    (): TrayState => ({
+      loggedIn: startupFlow?.isLoggedIn ?? false,
+      accountName: startupFlow?.isLoggedIn ? cachedAccountName : null,
+      version: fullVersion(),
+      messages: messages(),
+    }),
+  )
+
+  ipcMain.on('ds:tray-action', (_event, action: unknown) => {
+    if (
+      action === 'open-main' ||
+      action === 'logout' ||
+      action === 'settings' ||
+      action === 'quit' ||
+      action === 'connect'
+    ) {
+      handleTrayAction(action)
+    }
+  })
+
+  ipcMain.on('ds:tray-hide', () => trayMenuWindow?.hide())
+
   ipcMain.handle('ds:get-settings', (): SettingsSnapshot => settingsSnapshot())
   ipcMain.handle('ds:set-hotkey', (_event, accelerator: unknown): HotkeyUpdateResult =>
     handleSetHotkey(typeof accelerator === 'string' ? accelerator : ''),
@@ -444,7 +532,6 @@ function registerIpcHandlers(): void {
       save({ theme })
     }
   })
-  ipcMain.handle('ds:logout', () => handleLogout())
 
   // ── 快捷窗口 ──────────────────────────────────────────────
 
@@ -667,8 +754,12 @@ async function handleLogout(): Promise<void> {
 
   if (activeToken) activeToken.cancelled = true
 
-  save({ login: { knownLoggedIn: false } })
+  cachedAccountName = null
+  closeSettingsWindow()
+  save({ login: { knownLoggedIn: false }, guide: { introSeen: true } })
+  // onLoggedOut 会收起主窗口 / 快捷窗口，并显示引导页 2
   startupFlow?.onLoggedOut()
+
   // 退出登录：历史列表的内存数据一并清掉
   historyListEpoch += 1
   historyApiItems = null
@@ -678,19 +769,75 @@ async function handleLogout(): Promise<void> {
   quickWindow?.sendEvent({ type: 'conversation-cleared' })
   quickWindow?.setMode('empty')
 
-  // 退出登录后需要重新登录：把主窗口亮出来，面板收起
-  mainWindow?.show()
-  quickWindow?.hide()
-
   try {
-    // 等页面真的切成登录页，再开始监听登录完成，
-    // 否则可能拿旧页面的 DOM 误判成「已经登录」
+    // 页面在后台切回登录页；引导页 2 点「开始」时直接把主窗口亮出来。
+    // 等页面真的切成登录页再开始监听，否则可能拿旧页面误判成「已经登录」。
     await mainWindow?.pageView.webContents.loadURL(DEEPSEEK_URL)
   } catch (err) {
     console.error('[设置] 重新加载登录页失败:', err)
   }
 
   startupFlow?.watchLogin()
+}
+
+/** 引导页 2 点「开始」：收起引导，显示主窗口的 DeepSeek 登录页 */
+async function handleGuideStart(): Promise<void> {
+  guideWindow?.hide()
+  if (!mainWindow) return
+
+  mainWindow.show()
+
+  const url = mainWindow.pageView.webContents.getURL()
+  if (!/\/sign_in(?:$|[/?#])/.test(url)) {
+    try {
+      await mainWindow.pageView.webContents.loadURL(DEEPSEEK_URL)
+    } catch (err) {
+      console.error('[引导] 打开登录页失败:', err)
+    }
+  }
+
+  startupFlow?.watchLogin()
+}
+
+/** 状态栏菜单动作；菜单窗口先收起，再执行 */
+function handleTrayAction(action: TrayAction): void {
+  trayMenuWindow?.hide()
+
+  switch (action) {
+    case 'open-main':
+      mainWindow?.show()
+      break
+    case 'settings':
+      openSettingsWindow()
+      break
+    case 'quit':
+      app.quit()
+      break
+    case 'logout':
+      void confirmTrayLogout()
+      break
+    case 'connect':
+      guideWindow?.show(GUIDE_STEP.connect)
+      break
+  }
+}
+
+/** 状态栏菜单的退出账号：macOS 原生二次确认 */
+async function confirmTrayLogout(): Promise<void> {
+  const t = (key: MessageKey): string => translate(currentLanguage(), key)
+  app.focus({ steal: true })
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: t('tray.logoutTitle'),
+    message: t('tray.logoutTitle'),
+    detail: t('tray.logoutDetail'),
+    buttons: [t('tray.cancel'), t('tray.confirmLogout')],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  })
+
+  if (response === 1) await handleLogout()
 }
 
 // ── 快捷窗口 ↔ DeepSeek 网页 ──────────────────────────────────────
@@ -1453,7 +1600,7 @@ function runSettingsSelfCheck(): void {
           themeOptions: Array.from(document.getElementById('theme').options).map((o) => o.textContent),
           themeValue: document.getElementById('theme').value,
           version: document.getElementById('version').textContent,
-          logout: document.getElementById('logout').textContent,
+          hasLogout: !!document.getElementById('logout'),
           window: [innerWidth, innerHeight],
         }))()`,
       )
@@ -1487,7 +1634,7 @@ function runSettingsSelfCheck(): void {
           hotkeyLabel: document.getElementById('lbHotkey').textContent,
           resetOptions: Array.from(document.getElementById('resetAfter').options).map((o) => o.textContent),
           languageOptions: Array.from(document.getElementById('language').options).map((o) => o.textContent),
-          logout: document.getElementById('logout').textContent,
+          hasLogout: !!document.getElementById('logout'),
         }))()`,
       )
       console.log('[设置自检] 英文界面:', JSON.stringify(enProbe))
@@ -1611,6 +1758,135 @@ function runFocusSelfCheck(quick: QuickWindow | null): void {
  * 启动门禁自检：打印主窗口/快捷窗口谁可见、登录提示是什么。
  * `DS_FAKE_LOGIN=1` 会模拟一次登录完成，验证「主窗口收起、快捷窗口出现」。
  */
+async function runGuideSelfCheck(
+  guide: GuideWindow | null,
+  main: MainWindow | null,
+): Promise<void> {
+  setTimeout(() => {
+    void (async () => {
+      if (!guide) {
+        console.log('[引导测试] 没有引导窗口')
+        process.exit(1)
+      }
+      const wc = guide.window.webContents
+      const shot = async (name: string): Promise<void> => {
+        try {
+          writeFileSync(`/tmp/${name}.png`, (await wc.capturePage()).toPNG())
+        } catch (error) {
+          console.log(`[引导测试] 截图失败 ${name}:`, String(error))
+        }
+      }
+
+      console.log('[引导测试] 初始:', JSON.stringify({ visible: guide.isVisible, url: wc.getURL() }))
+      await shot('ds-guide-1')
+
+      await wc.executeJavaScript(`document.getElementById('nextBtn').click(); true`)
+      await delay(500)
+      console.log(
+        '[引导测试] 下一步:',
+        JSON.stringify(
+          await wc.executeJavaScript(`({
+            introHidden: document.getElementById('pageIntro').hidden,
+            connectHidden: document.getElementById('pageConnect').hidden,
+          })`),
+        ),
+      )
+      await shot('ds-guide-2')
+
+      await wc.executeJavaScript(`document.getElementById('startBtn').click(); true`)
+      await delay(1200)
+      console.log(
+        '[引导测试] 开始:',
+        JSON.stringify({
+          guideVisible: guide.isVisible,
+          mainVisible: main?.isVisible ?? null,
+          url: main?.pageView.webContents.getURL() ?? null,
+        }),
+      )
+      process.exit(0)
+    })()
+  }, 15_000)
+}
+
+async function runTrayMenuSelfCheck(tray: TrayMenuWindow | null): Promise<void> {
+  await delay(13_000)
+  await openTrayMenu()
+  await delay(800)
+
+  if (!tray?.isVisible) {
+    console.log('[状态栏菜单测试] 菜单没有显示（可能未登录）')
+    process.exit(1)
+  }
+
+  const state = await tray.window.webContents.executeJavaScript(`({
+    connected: document.body.dataset.connected,
+    account: document.getElementById('accountName')?.textContent || '',
+    linked: document.getElementById('linked')?.textContent || '',
+    version: document.getElementById('version')?.textContent || '',
+    openMain: document.getElementById('openMain')?.textContent || '',
+    logout: document.getElementById('logout')?.textContent || '',
+    connect: document.getElementById('connect')?.textContent || '',
+  })`)
+  console.log('[状态栏菜单测试]', JSON.stringify(state))
+
+  try {
+    const focus = await tray.window.webContents.executeJavaScript(`(() => {
+      const el = document.querySelector('[data-action="logout"]');
+      if (el && !el.hidden) el.focus();
+      const active = document.activeElement;
+      const style = active ? getComputedStyle(active) : null;
+      return {
+        action: active?.getAttribute('data-action') || '',
+        outlineStyle: style?.outlineStyle || '',
+        outlineWidth: style?.outlineWidth || '',
+      };
+    })()`)
+    console.log('[状态栏菜单测试] 焦点:', JSON.stringify(focus))
+    writeFileSync(
+      '/tmp/ds-tray-menu-focus.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+    await tray.window.webContents.executeJavaScript(`document.activeElement?.blur(); true`)
+    writeFileSync(
+      '/tmp/ds-tray-menu-dark.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+    nativeTheme.themeSource = 'light'
+    await delay(350)
+    writeFileSync(
+      '/tmp/ds-tray-menu-light.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+  } catch (error) {
+    console.log('[状态栏菜单测试] 截图失败:', String(error))
+  }
+
+  // 给外部 screencapture 留出观察位置的窗口
+  await delay(2_000)
+
+  if (state.connected === 'true') {
+    await tray.window.webContents.executeJavaScript(
+      `document.querySelector('[data-action="open-main"]').click(); true`,
+    )
+    await delay(400)
+    console.log(
+      '[状态栏菜单测试] 打开主窗口:',
+      JSON.stringify({ mainVisible: mainWindow?.isVisible ?? null, trayVisible: tray.isVisible }),
+    )
+  } else {
+    await tray.window.webContents.executeJavaScript(
+      `document.querySelector('[data-action="connect"]').click(); true`,
+    )
+    await delay(400)
+    console.log(
+      '[状态栏菜单测试] 立即连接:',
+      JSON.stringify({ guideVisible: guideWindow?.isVisible ?? null, trayVisible: tray.isVisible }),
+    )
+  }
+
+  process.exit(0)
+}
+
 function runStartupSelfCheck(
   win: MainWindow | null,
   quick: QuickWindow | null,
@@ -2983,6 +3259,10 @@ function runApiMarkdownSelfCheck(quick: QuickWindow | null): void {
     '\\frac{1}{2}',
     '\\]',
     '',
+    '```math',
+    '\\frac{1}{3}',
+    '```',
+    '',
     '脚注[^1]',
     '',
     '[^1]: 这是脚注内容',
@@ -3004,25 +3284,59 @@ function runApiMarkdownSelfCheck(quick: QuickWindow | null): void {
   setTimeout(() => {
     void quick.window.webContents
       .executeJavaScript(
-        `(() => ({
-          katex: document.querySelectorAll('.md .katex').length,
-          cites: document.querySelectorAll('.md .md-cite').length,
-          tables: document.querySelectorAll('.md table').length,
-          codeBlocks: document.querySelectorAll('.md .md-code-block').length,
-          codeCopies: document.querySelectorAll('.md .md-code-copy').length,
-          tasks: document.querySelectorAll('.md .task-list-item').length,
-          checkboxes: document.querySelectorAll('.md .task-list-item-checkbox').length,
-          footnotes: document.querySelectorAll('.md .footnotes').length,
-          headings: document.querySelectorAll('.md h2').length,
-          lists: document.querySelectorAll('.md ul').length,
-          quote: document.querySelectorAll('.md blockquote').length,
-        }))()`,
+        `(() => {
+          let katexFontFaces = 0;
+          for (const sheet of Array.from(document.styleSheets)) {
+            let rules = [];
+            try { rules = Array.from(sheet.cssRules || []); } catch (error) {}
+            for (const rule of rules) {
+              if (rule.type === CSSRule.FONT_FACE_RULE && /KaTeX/i.test(rule.cssText)) {
+                katexFontFaces += 1;
+              }
+            }
+          }
+          return {
+            katex: document.querySelectorAll('.md .katex').length,
+            math: document.querySelectorAll('.md math').length,
+            mathBlock: document.querySelectorAll('.md math[display="block"]').length,
+            katexHtml: document.querySelectorAll('.md .katex-html').length,
+            katexDisplay: document.querySelectorAll('.md .katex-display').length,
+            mdMathDisplay: document.querySelectorAll('.md .md-math-display').length,
+            eqn: document.querySelectorAll('.md eqn').length,
+            katexFontFaces,
+            mathFontRequests: performance.getEntriesByType('resource')
+              .filter((entry) => /KaTeX_.*\\.(woff2?|ttf)/.test(entry.name)).length,
+            hljsSpans: document.querySelectorAll('.md pre code.hljs span').length,
+            cites: document.querySelectorAll('.md .md-cite').length,
+            tables: document.querySelectorAll('.md table').length,
+            codeBlocks: document.querySelectorAll('.md .md-code-block').length,
+            codeCopies: document.querySelectorAll('.md .md-code-copy').length,
+            tasks: document.querySelectorAll('.md .task-list-item').length,
+            checkboxes: document.querySelectorAll('.md .task-list-item-checkbox').length,
+            footnotes: document.querySelectorAll('.md .footnotes').length,
+            headings: document.querySelectorAll('.md h2').length,
+            lists: document.querySelectorAll('.md ul').length,
+            quote: document.querySelectorAll('.md blockquote').length,
+          };
+        })()`,
       )
       .then(async (state) => {
         console.log('[API MD测试] ' + JSON.stringify(state))
         try {
           writeFileSync(
             '/tmp/ds-api-md.png',
+            (await quick.window.webContents.capturePage()).toPNG(),
+          )
+          await quick.window.webContents.executeJavaScript(`
+            (() => {
+              const math = document.querySelector('.md-math-display');
+              if (math) math.scrollIntoView({ block: 'center' });
+              return !!math;
+            })()
+          `)
+          await new Promise((resolve) => setTimeout(resolve, 300))
+          writeFileSync(
+            '/tmp/ds-api-md-math.png',
             (await quick.window.webContents.capturePage()).toPNG(),
           )
         } catch (error) {
