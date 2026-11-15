@@ -2,16 +2,55 @@
  * 历史对话走接口时，接口返回的是原始 Markdown。
  * 这里用 markdown-it + KaTeX + highlight.js 自己渲染，
  * 支持官方网页端实际支持的 CommonMark / GFM / 数学公式 / 代码高亮。
+ *
+ * 这些依赖只给 renderer 用，Vite 会把它们打进 quick-*.js。
+ * 它们放在 devDependencies 里，不要让主进程 / preload 引用 ——
+ * 否则 electron-builder 不会打包 node_modules，运行时会缺包。
+ * scripts/dist.mjs 有对应的构建检查。
+ *
+ * 数学公式统一输出 MathML（和页面 HTML 路径一致），
+ * 不引入 katex.min.css，也不带 KaTeX 字体。
  */
 
 import MarkdownIt from 'markdown-it'
 import texmath from 'markdown-it-texmath'
 import taskLists from 'markdown-it-task-lists'
 import footnote from 'markdown-it-footnote'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import cpp from 'highlight.js/lib/languages/cpp'
+import css from 'highlight.js/lib/languages/css'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import python from 'highlight.js/lib/languages/python'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
 import katex from 'katex'
-import 'katex/dist/katex.min.css'
 import { CODE_COPY_ICON, attachCodeCopy, getCopyCodeLabel } from './markdown'
+
+/**
+ * 只注册常用语言。全量 highlight.js 会把 190 多种语言都带进快捷窗口，
+ * 而这里只按 fence 的语言名显式高亮；未注册的语言自然退化成纯文本。
+ */
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('xml', xml)
+
+/** 两条公式路径必须共用同一套输出选项，漏掉任何一条都会退化成无 CSS 的 HTML */
+const KATEX_OPTIONS = {
+  output: 'mathml' as const,
+  throwOnError: false,
+  strict: 'ignore' as const,
+}
 
 const md = new MarkdownIt({
   html: false,
@@ -24,7 +63,8 @@ md.use(footnote)
 md.use(texmath, {
   engine: katex,
   delimiters: ['dollars', 'brackets'],
-  katexOptions: { throwOnError: false, strict: 'ignore' },
+  // texmath 会往这个对象上写 throwOnError / macros，传副本避免污染共享配置
+  katexOptions: { ...KATEX_OPTIONS },
 })
 
 /** DeepSeek 的引用标记：转成数字角标 */
@@ -46,8 +86,8 @@ md.renderer.rules.fence = (tokens: any, idx: number): string => {
 
   if (language === 'math') {
     return `<div class="md-math-display">${katex.renderToString(token.content.trim(), {
+      ...KATEX_OPTIONS,
       displayMode: true,
-      throwOnError: false,
     })}</div>\n`
   }
 
@@ -82,8 +122,8 @@ md.renderer.rules.image = (tokens: any, idx: number): string => {
   return `<span class="md-image-alt">${md.utils.escapeHtml(alt)}</span>`
 }
 
-/** Markdown HTML 缓存：8MB 内容预算、单条 512KB、LRU、仅内存 */
-const MAX_CACHE_CHARS = 8 * 1024 * 1024
+/** Markdown HTML 缓存：2M 字符预算、单条 512K 字符、LRU、仅内存 */
+const MAX_CACHE_CHARS = 2 * 1024 * 1024
 const MAX_ENTRY_CHARS = 512 * 1024
 const htmlCache = new Map<string, string>()
 let cacheChars = 0

@@ -3,6 +3,19 @@ import type { Language, ResolvedLanguage } from './i18n'
 /** 主题：跟随系统 / 浅色 / 深色 */
 export type ThemeSetting = 'system' | 'light' | 'dark'
 
+/** 功能引导的两个页面：1 欢迎 / 2 关联 DeepSeek */
+export type GuideStep = 1 | 2
+
+/** 状态栏弹出菜单需要的数据 */
+export interface TrayState {
+  loggedIn: boolean
+  accountName: string | null
+  version: string
+  messages: Record<string, string>
+}
+
+export type TrayAction = 'open-main' | 'logout' | 'settings' | 'quit' | 'connect'
+
 /** 快捷窗口的两种形态（设计稿：快捷窗口-无内容 / 快捷窗口-有内容） */
 export type QuickMode = 'empty' | 'content'
 
@@ -83,6 +96,59 @@ export interface ThinkingInfo {
   aggregateSearch?: ThinkingSearch
 }
 
+
+/** 上传附件在快捷窗口里的安全元数据；本地路径只留在主进程 */
+export type AttachmentStatus = 'ready' | 'uploading' | 'parsing' | 'error'
+
+export interface AttachmentStatusInfo {
+  id: string
+  status: Exclude<AttachmentStatus, 'parsing'>
+  error?: string
+  /** 只有上传失败可以点卡片重新上传；解析/提取失败不可重试 */
+  retryable?: boolean
+}
+
+export interface AttachmentInfo {
+  id: string
+  name: string
+  size: number
+  ext: string
+  kind: 'image' | 'pdf' | 'text' | 'file'
+  /** 与 DeepSeek 网页端预览能力一致；false 时卡片不可点击 */
+  previewable: boolean
+  status?: AttachmentStatus
+  error?: string
+  /** 上传失败时为 true，卡片可以点击重新上传 */
+  retryable?: boolean
+  /** 本地图片的 data URL，或历史文件的可访问缩略图地址 */
+  thumbnailUrl?: string
+  /** 历史附件在文件服务上的签名路径；只给主进程预览使用 */
+  signedPath?: string
+}
+
+export interface RejectedAttachment {
+  name: string
+  reason: string
+}
+
+export interface AttachmentPickResult {
+  attachments: AttachmentInfo[]
+  rejected: RejectedAttachment[]
+  /** 页面未就绪、无法读取 accept 等整体性错误 */
+  error?: string
+}
+
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'text' | 'error'
+
+export interface AttachmentPreview {
+  kind: AttachmentPreviewKind
+  name: string
+  /** image / pdf 的临时本地预览地址 */
+  url?: string
+  /** text/code 的内容 */
+  text?: string
+  message?: string
+}
 /** 历史对话里的消息。AI 消息额外带渲染好的 HTML（快速窗口负责清洗） */
 export interface HistoryMessage {
   role: 'user' | 'ai'
@@ -96,6 +162,8 @@ export interface HistoryMessage {
   search?: SearchInfo
   /** 深度思考的内容 */
   thinking?: ThinkingInfo
+  /** 用户消息附带的附件；AI 消息为 undefined */
+  attachments?: AttachmentInfo[]
 }
 
 /** 主进程推给快捷窗口的事件，走同一条通道 */
@@ -144,6 +212,8 @@ export type QuickEvent =
 
 export interface QuickSubmitPayload {
   text: string
+  /** 主进程 pickAttachments 返回的本地附件 id；提交时由主进程解析 */
+  attachmentIds?: string[]
   /** 「深度思考」开关 */
   deepThink: boolean
   /** 「智能搜索」开关 */
@@ -200,7 +270,6 @@ export interface DsApi {
 
   // ── 设置 ──────────────────────────────────────────────────
 
-  openSettings: () => void
   getSettings: () => Promise<SettingsSnapshot>
   setHotkey: (accelerator: string) => Promise<HotkeyUpdateResult>
   /** 修改快捷窗口内的本地快捷键（newChat / history） */
@@ -211,7 +280,6 @@ export interface DsApi {
   setResetAfter: (minutes: number) => Promise<void>
   setLanguage: (language: Language) => Promise<void>
   setTheme: (theme: ThemeSetting) => Promise<void>
-  logout: () => Promise<void>
 
   // ── 快捷窗口 ──────────────────────────────────────────────
 
@@ -250,6 +318,33 @@ export interface DsApi {
   /** 搜索结果栏展开/收起：主进程会相应加宽/收窄窗口 */
   setSearchPanel: (open: boolean) => void
 
+  /** 打开系统文件选择器，返回校验后的附件元数据 */
+  pickAttachments: () => Promise<AttachmentPickResult>
+
+  /** 把从系统剪贴板粘贴进来的文件路径导入为待发送附件 */
+  importAttachment: (path: string) => Promise<AttachmentPickResult>
+
+  /** 取 Finder 文件对象对应的真实路径（Electron webUtils） */
+  getPathForFile: (file: unknown) => string
+
+  /** 把快捷窗口最终接受的附件立即交给网页上传 */
+  prepareAttachments: (ids: string[]) => void
+
+  /** 已发送附件预览栏展开/收起：复用右侧栏的宽度 */
+  setAttachmentPanel: (open: boolean) => void
+
+  /** 按附件 id 获取预览内容；图片/PDF 返回临时地址，文本返回内容 */
+  requestAttachmentPreview: (id: string) => Promise<AttachmentPreview | null>
+
+  /** 查询待发送附件的上传/解析状态 */
+  getAttachmentStatuses: (ids: string[]) => Promise<AttachmentStatusInfo[]>
+
+  /** 移除一个待发送附件（同时从网页输入区移除） */
+  removeAttachment: (id: string) => Promise<void>
+
+  /** 上传失败后重新上传；解析/提取失败不会显示这个入口 */
+  retryAttachment: (id: string) => Promise<void>
+
   /**
    * 按需拉取某条回答的完整搜索结果。
    * searchIndex 指定第几次搜索；不传则聚合去重（底部「N 个网页」）。
@@ -265,6 +360,22 @@ export interface DsApi {
 
   /** 顶栏「扩大」：切到主窗口，关闭快捷窗口 */
   quickExpand: () => void
+
+  // ── 功能引导 ──────────────────────────────────────────────
+
+  /** 引导页 1 → 引导页 2 */
+  guideNext: () => void
+  /** 引导页 2 → DeepSeek 登录页（显示主窗口） */
+  guideStart: () => void
+  /** 主进程切换引导页时通知渲染层 */
+  onGuideStep: (callback: (step: GuideStep) => void) => void
+
+  // ── 状态栏菜单 ────────────────────────────────────────────
+
+  getTrayState: () => Promise<TrayState>
+  trayAction: (action: TrayAction) => void
+  hideTrayMenu: () => void
+  onTrayShown: (callback: () => void) => void
 
   // ── 窗口拖动（透明窗口下原生拖拽区不可靠，改为手动移动）──
 

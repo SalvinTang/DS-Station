@@ -1,15 +1,17 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Language } from '../shared/i18n'
 import type {
   DsApi,
+  GuideStep,
   QuickEvent,
   QuickMode,
   QuickSubmitPayload,
   ThemeSetting,
+  TrayAction,
 } from '../shared/types'
 
 /**
- * 只暴露给「我们自己的」界面（标题栏、快捷窗口、设置页）。
+ * 只暴露给「我们自己的」界面（快捷窗口、设置页、引导页、状态栏菜单）。
  * DeepSeek 网页视图**不加载这个 preload**，所以远程页面拿不到任何东西。
  *
  * 每个方法都对应主进程里一个明确的 ipcMain 处理器，
@@ -20,7 +22,6 @@ const api: DsApi = {
   getMessages: () => ipcRenderer.invoke('ds:get-messages'),
   openExternal: (url: string) => ipcRenderer.send('ds:open-external', url),
 
-  openSettings: () => ipcRenderer.send('ds:open-settings'),
   getSettings: () => ipcRenderer.invoke('ds:get-settings'),
   setHotkey: (accelerator: string) => ipcRenderer.invoke('ds:set-hotkey', accelerator),
   setQuickShortcut: (name: 'newChat' | 'history', accelerator: string) =>
@@ -28,7 +29,6 @@ const api: DsApi = {
   setResetAfter: (minutes: number) => ipcRenderer.invoke('ds:set-reset-after', minutes),
   setLanguage: (language: Language) => ipcRenderer.invoke('ds:set-language', language),
   setTheme: (theme: ThemeSetting) => ipcRenderer.invoke('ds:set-theme', theme),
-  logout: () => ipcRenderer.invoke('ds:logout'),
 
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
   resizeQuickWindow: (height) => ipcRenderer.send('ds:quick-resize', height),
@@ -41,10 +41,32 @@ const api: DsApi = {
   loadOlderQuickHistory: () => ipcRenderer.send('ds:quick-history-older'),
   setQuickMode: (mode: QuickMode) => ipcRenderer.send('ds:quick-mode', mode),
   setSearchPanel: (open: boolean) => ipcRenderer.send('ds:quick-search-panel', open),
+  pickAttachments: () => ipcRenderer.invoke('ds:pick-attachments'),
+  importAttachment: (path: string) => ipcRenderer.invoke('ds:import-attachment', path),
+  getPathForFile: (file: unknown) => webUtils.getPathForFile(file as File),
+  prepareAttachments: (ids: string[]) => ipcRenderer.send('ds:prepare-attachments', ids),
+  setAttachmentPanel: (open: boolean) => ipcRenderer.send('ds:quick-attachment-panel', open),
+  requestAttachmentPreview: (id: string) => ipcRenderer.invoke('ds:preview-attachment', id),
+  getAttachmentStatuses: (ids: string[]) => ipcRenderer.invoke('ds:attachment-statuses', ids),
+  removeAttachment: (id: string) => ipcRenderer.invoke('ds:remove-attachment', id),
+  retryAttachment: (id: string) => ipcRenderer.invoke('ds:retry-attachment', id),
   requestSearchDetails: (answerIndex: number, searchIndex?: number) =>
     ipcRenderer.invoke('ds:search-details', answerIndex, searchIndex),
   quickNewChat: () => ipcRenderer.send('ds:quick-new-chat'),
   quickExpand: () => ipcRenderer.send('ds:quick-expand'),
+
+  guideNext: () => ipcRenderer.send('ds:guide-next'),
+  guideStart: () => ipcRenderer.send('ds:guide-start'),
+  onGuideStep: (callback: (step: GuideStep) => void) => {
+    ipcRenderer.on('ds:guide-step', (_sender, step: GuideStep) => callback(step))
+  },
+
+  getTrayState: () => ipcRenderer.invoke('ds:tray-state'),
+  trayAction: (action: TrayAction) => ipcRenderer.send('ds:tray-action', action),
+  hideTrayMenu: () => ipcRenderer.send('ds:tray-hide'),
+  onTrayShown: (callback: () => void) => {
+    ipcRenderer.on('ds:tray-shown', () => callback())
+  },
 
   beginWindowDrag: (screenX, screenY) =>
     ipcRenderer.send('ds:window-drag-start', screenX, screenY),

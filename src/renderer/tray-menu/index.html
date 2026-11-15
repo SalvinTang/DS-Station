@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>DS Station</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="menu" role="menu" aria-label="DS Station">
+      <div class="title">DS Station</div>
+
+      <div class="project">
+        <div class="account">
+          <div class="avatar"><img src="./deepseek.png" alt="" /></div>
+          <div class="account-text">
+            <div class="account-name">DeepSeek</div>
+            <div class="account-id" id="accountName"></div>
+          </div>
+          <span class="linked" id="linked"></span>
+        </div>
+
+        <div class="list">
+          <button class="row" type="button" role="menuitem" data-action="open-main" data-connected-only>
+            <span id="openMain"></span>
+            <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+          <button class="row" type="button" role="menuitem" data-action="logout" data-connected-only>
+            <span id="logout"></span>
+            <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path
+                d="M8 2H3.8A1.8 1.8 0 002 3.8v6.4A1.8 1.8 0 003.8 12H8M6 7h7M10 4l3 3-3 3"
+                stroke="currentColor"
+                stroke-width="1.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </button>
+          <button class="row" type="button" role="menuitem" data-action="connect" data-disconnected-only hidden>
+            <span id="connect"></span>
+            <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button type="button" role="menuitem" data-action="settings" id="settings"></button>
+        <button type="button" role="menuitem" data-action="quit" id="quit"></button>
+      </div>
+
+      <div class="version" id="version"></div>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

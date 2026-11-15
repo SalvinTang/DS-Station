@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>DS Station</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="titlebar"><span>DS Station</span></header>
+
+    <main class="stage">
+      <section class="page" id="pageIntro">
+        <h1 id="welcomeIntro"></h1>
+
+        <div class="mini-quick">
+          <div class="mini-placeholder" id="miniPlaceholder"></div>
+          <div class="mini-bottom">
+            <span class="mini-pill">
+              <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path
+                  d="M7 1.2l1.35 4.45L12.8 7l-4.45 1.35L7 12.8 5.65 8.35 1.2 7l4.45-1.35L7 1.2z"
+                  stroke="currentColor"
+                  stroke-width="1.2"
+                  stroke-linejoin="round"
+                />
+              </svg>
+              <span id="miniDeep"></span>
+            </span>
+            <span class="mini-pill">
+              <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="5.2" stroke="currentColor" stroke-width="1.1" />
+                <path d="M1.8 7h10.4" stroke="currentColor" stroke-width="1.1" />
+                <path
+                  d="M7 1.8c1.5 1.4 2.3 3.2 2.3 5.2S8.5 12.2 7 12.2 4.7 10.4 4.7 8.4 5.5 3.2 7 1.8z"
+                  stroke="currentColor"
+                  stroke-width="1.1"
+                />
+              </svg>
+              <span id="miniSearch"></span>
+            </span>
+            <span class="mini-pill">
+              <svg viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="5.3" stroke="currentColor" stroke-width="1.2" />
+                <path d="M7 3.8V7l2.3 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+              </svg>
+              <span id="miniHistory"></span>
+            </span>
+            <span class="mini-send">
+              <svg width="13" height="13" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path d="M7 12V2M3 6l4-4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </span>
+          </div>
+        </div>
+
+        <div class="shortcut-card">
+          <div class="shortcut-line">
+            <span id="hotkeyPrefix"></span>
+            <span class="keycaps" id="keycaps"></span>
+            <span id="hotkeySuffix"></span>
+          </div>
+          <p class="hint" id="hotkeyHint"></p>
+        </div>
+
+        <button class="primary" type="button" id="nextBtn"></button>
+      </section>
+
+      <section class="page" id="pageConnect" hidden>
+        <h1 id="welcomeConnect"></h1>
+        <h2 id="linkTitle"></h2>
+
+        <div class="logos">
+          <div class="logo-box"><img src="./deepseek.png" alt="DeepSeek" /></div>
+          <div class="arrow">
+            <svg width="46" height="12" viewBox="0 0 46 12" fill="none" aria-hidden="true">
+              <path
+                d="M2 6h42M6 2L2 6l4 4M40 2l4 4-4 4"
+                stroke="currentColor"
+                stroke-width="1.4"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
+          <div class="logo-box"><img src="./ds-station.png" alt="DS Station" /></div>
+        </div>
+
+        <div class="privacy-card">
+          <div class="privacy-label">
+            <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path
+                d="M6 1.2l4.2 1.6v3c0 2.4-1.6 4.2-4.2 5-2.6-.8-4.2-2.6-4.2-5v-3L6 1.2z"
+                stroke="currentColor"
+                stroke-width="1"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span id="privacyLabel"></span>
+          </div>
+          <p id="privacyAccount"></p>
+          <p id="privacyChat"></p>
+          <div class="privacy-gap"></div>
+          <p id="privacyOfficial"></p>
+        </div>
+
+        <button class="primary" type="button" id="startBtn"></button>
+      </section>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

@@ -1,20 +1,22 @@
 import { BaseWindow, WebContentsView, nativeTheme, type Event } from 'electron'
-import { join } from 'node:path'
-import { DEEPSEEK_URL, TITLEBAR_HEIGHT } from '../../shared/constants'
+import { DEEPSEEK_URL } from '../../shared/constants'
 import { isQuitting } from '../app-state'
 import { getDeepseekSession, openInBrowser, shouldNavigateInApp } from '../session'
 import { load, save, type WindowState } from '../settings'
 
 /**
- * 主窗口 = BaseWindow + 两个 WebContentsView
+ * 主窗口 = BaseWindow + DeepSeek 的 WebContentsView
  *
  *   ┌──────────────────────────────┐
- *   │ ● ● ●              [齿轮]     │  ← titlebarView（自绘，44px）
+ *   │ ● ● ●        DS Station      │  ← 系统原生标题栏
  *   ├──────────────────────────────┤
  *   │                              │
  *   │      DeepSeek 网页版          │  ← pageView（引擎，永不销毁）
  *   │                              │
  *   └──────────────────────────────┘
+ *
+ * 标题栏用系统原生实现，不再单独加载一个本地 WebContentsView。
+ * 右上角设置入口已移到状态栏菜单，主窗口只保留网页本身。
  *
  * 为什么用 BaseWindow 而不是 BrowserWindow：
  * 快捷窗口要复用 pageView 里的这个网页实例（决策 D1），
@@ -48,7 +50,6 @@ export class MainWindow {
   /** DeepSeek 网页视图 —— 快捷窗口后续要读它、驱动它 */
   readonly pageView: WebContentsView
 
-  private readonly titlebarView: WebContentsView
   private boundsTimer: NodeJS.Timeout | null = null
   private readyForPersist = false
 
@@ -71,18 +72,13 @@ export class MainWindow {
        * 这样已登录用户启动时不会看到主窗口闪一下。
        */
       show: false,
-      // hiddenInset：保留系统红绿灯，但让出顶部空间给我们自绘的标题栏
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 18, y: 15 },
+      // 系统原生标题栏：自带红绿灯、拖动和阴影，不再单独占一个渲染进程
+      titleBarStyle: 'default',
       backgroundColor: dark ? '#1b1c20' : '#ffffff',
     })
 
     this.pageView = this.createPageView()
-    this.titlebarView = this.createTitlebarView()
-
-    // 先加网页视图、再加标题栏，保证标题栏在 z 序最上
     this.window.contentView.addChildView(this.pageView)
-    this.window.contentView.addChildView(this.titlebarView)
 
     this.attachNavigationGuards()
 
@@ -146,20 +142,6 @@ export class MainWindow {
     return view
   }
 
-  private createTitlebarView(): WebContentsView {
-    const view = new WebContentsView({
-      webPreferences: {
-        preload: join(__dirname, '../preload/index.js'),
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    })
-    this.logLifecycle(view, '标题栏')
-    void view.webContents.loadFile(join(__dirname, '../renderer/titlebar/index.html'))
-    return view
-  }
-
   private attachNavigationGuards(): void {
     const wc = this.pageView.webContents
 
@@ -191,9 +173,7 @@ export class MainWindow {
       console.log(`[${label}] 加载完成: ${wc.getURL()}`)
       if (label === 'DeepSeek') {
         const [width, height] = this.window.getContentSize()
-        console.log(
-          `[主窗口] 尺寸 ${width}×${height}，标题栏 ${TITLEBAR_HEIGHT}px，网页区 ${height - TITLEBAR_HEIGHT}px`,
-        )
+        console.log(`[主窗口] 网页区 ${width}×${height}`)
       }
     })
     wc.on('did-fail-load', (_event, code, description, url) => {
@@ -205,14 +185,7 @@ export class MainWindow {
   private layout(): void {
     if (this.window.isDestroyed()) return
     const [width, height] = this.window.getContentSize()
-
-    this.titlebarView.setBounds({ x: 0, y: 0, width, height: TITLEBAR_HEIGHT })
-    this.pageView.setBounds({
-      x: 0,
-      y: TITLEBAR_HEIGHT,
-      width,
-      height: Math.max(0, height - TITLEBAR_HEIGHT),
-    })
+    this.pageView.setBounds({ x: 0, y: 0, width, height })
   }
 
   private persistBounds(): void {

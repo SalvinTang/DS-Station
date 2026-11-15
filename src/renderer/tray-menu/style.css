@@ -1,0 +1,263 @@
+/*
+ * 状态栏图标弹出菜单。
+ *
+ * 窗口是透明无边框的；圆角、边框和阴影全部由这层 CSS 画出来。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --bg: #ffffff;
+  --fg: #0f1115;
+  --muted: #61666b;
+  --line: rgba(15, 17, 21, 0.08);
+  --border: #e4e5e9;
+  --account-bg: #f7f8fa;
+  --hover: rgba(15, 17, 21, 0.05);
+
+  --accent: #3964fe;
+  --accent-soft: #e8f0fe;
+  --accent-border: #c9d8ff;
+
+  --version: #9aa0a8;
+  --shadow:
+    0 0 0 0.5px rgba(0, 0, 0, 0.05),
+    0 1px 2px rgba(20, 24, 35, 0.06),
+    0 6px 16px rgba(20, 24, 35, 0.1),
+    0 18px 36px rgba(20, 24, 35, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1c20;
+    --fg: #f9fafb;
+    --muted: #adb2b8;
+    --line: rgba(255, 255, 255, 0.09);
+    --border: rgba(255, 255, 255, 0.14);
+    --account-bg: #232328;
+    --hover: rgba(255, 255, 255, 0.07);
+
+    --accent: #679efe;
+    --accent-soft: #34415b;
+    --accent-border: #4868b2;
+
+    --version: #7e848d;
+    --shadow:
+      0 0 0 0.5px rgba(255, 255, 255, 0.06),
+      0 1px 2px rgba(0, 0, 0, 0.2),
+      0 6px 16px rgba(0, 0, 0, 0.3),
+      0 18px 36px rgba(0, 0, 0, 0.4);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body {
+  padding: 10px 36px 36px;
+  color: var(--fg);
+  font-family: 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button {
+  font: inherit;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.menu {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
+}
+
+.title {
+  margin: 2px 4px 10px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+/* ── 账号卡与菜单项：同一项目，共用一层边框 ───────────── */
+
+.project {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--account-bg);
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 76px;
+  padding: 0 12px;
+}
+
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex: none;
+  border-radius: 12px;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+.avatar img {
+  display: block;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.account-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-name {
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 14.5px;
+  font-weight: 650;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-id {
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linked {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  flex: none;
+  padding: 0 8px;
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 11px;
+}
+
+/* ── 菜单项 ─────────────────────────────────────────────── */
+
+.list {
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  color: var(--fg);
+  background: transparent;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+
+.row:hover {
+  background: var(--hover);
+}
+
+/*
+ * 打开菜单时第一行会自动获得焦点。默认的 focus 轮廓是强调色，
+ * 在项目组内部会被裁成一条横线，看起来像「退出账号」上方的异色分割线。
+ * 行内改用背景色提示焦点，彻底去掉这条线。
+ */
+.row:focus,
+.row:focus-visible {
+  outline: none;
+  background: transparent;
+}
+
+.row svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+
+/* ── 操作按钮 ───────────────────────────────────────────── */
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.actions button {
+  height: 32px;
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--fg);
+  background: transparent;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    filter 0.15s ease;
+}
+
+.actions button:hover {
+  background: var(--hover);
+}
+
+
+.version {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--version);
+  font-size: 10px;
+  text-align: center;
+}
+
+
+/* 菜单刚出现时先不响应行悬浮，等鼠标真正移动后再启用 */
+body:not(.hover-ready) .row:hover {
+  background: transparent;
+}

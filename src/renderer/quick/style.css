@@ -73,6 +73,9 @@
   --topbar-bg: #e9e9eb;
   --topbar-fg: #555555;
 
+  --remove-bg: #ffffff;
+  --remove-fg: #61666b;
+  --image-placeholder-fg: #81858c;
   --copy-fg: #81858c;
   --think-icon: #81858c;
   --think-text: #61666b;
@@ -139,6 +142,9 @@
     --topbar-bg: #232328;
     --topbar-fg: #ababab;
 
+    --remove-bg: #2c2c2e;
+    --remove-fg: #f9fafb;
+    --image-placeholder-fg: #adb2b8;
     --copy-fg: #adb2b8;
     --think-icon: #adb2b8;
     --think-text: #cfd3d6;
@@ -367,7 +373,10 @@ body {
 
 .msg-user {
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   justify-content: flex-end;
+  width: 100%;
 }
 
 .msg-user .bubble {
@@ -606,6 +615,22 @@ body {
 
 .md math {
   font-size: 1.05em;
+}
+
+/*
+ * KaTeX 只输出 MathML 后不再自带 .katex-display 包裹层。
+ * texmath 的块级公式外面是 <eqn>，fence 公式外面是 .md-math-display；
+ * 这两条规则保证块级公式仍然居中、有上下间距。
+ */
+.md eqn {
+  display: flex;
+  justify-content: center;
+  margin: 10px 0;
+}
+
+.md math[display='block'] {
+  width: fit-content;
+  margin-inline: auto;
 }
 
 /* 引用角标：数字胶囊 / 来源图标 + 名称 */
@@ -2014,4 +2039,552 @@ body {
 
 .search-pill .site-logo {
   border-color: var(--search-pill-bg);
+}
+
+
+/* ── 上传附件 ───────────────────────────────────────────────── */
+
+.attachment-tray {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding: 1px 1px 8px;
+  scrollbar-width: none;
+}
+
+.attachment-tray::-webkit-scrollbar {
+  display: none;
+}
+
+.attachment-tray[hidden] {
+  display: none;
+}
+
+.attach-card {
+  position: relative;
+  flex: none;
+  width: 156px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px 8px 9px;
+  border: 1px solid var(--tool-border);
+  border-radius: 14px;
+  background: var(--tool-bg);
+  color: var(--text);
+  text-align: left;
+}
+
+.attach-card.previewable {
+  cursor: pointer;
+}
+
+.attach-card.previewable:hover {
+  border-color: var(--tool-border-active);
+}
+
+.attach-card.is-error {
+  border-color: #f25a5a;
+}
+
+.attach-card.is-retryable {
+  cursor: pointer;
+}
+
+.attach-card.is-retryable:hover {
+  border-color: #f25a5a;
+}
+
+.attach-card.is-retryable.image-only {
+  justify-content: center;
+}
+
+.attach-retry-icon {
+  color: var(--muted, #61666b);
+}
+
+.attach-retry-icon svg {
+  display: block;
+}
+
+.attach-file-icon {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--muted, #61666b);
+}
+
+.attach-file-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.attach-thumb {
+  position: relative;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  overflow: hidden;
+  border: 1px solid var(--tool-border);
+  border-radius: 14px;
+  background: var(--tool-bg);
+}
+
+.attach-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.attach-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.attach-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-meta {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--placeholder);
+  font-size: 9.5px;
+  line-height: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-card.is-error .attach-meta {
+  color: #f25a5a;
+}
+
+.attach-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--remove-fg);
+  cursor: pointer;
+}
+
+.attach-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.attach-btn {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--placeholder);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.attach-btn:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.attach-btn:disabled {
+  color: var(--placeholder);
+  opacity: 0.4;
+  cursor: default;
+}
+
+.attach-btn:focus-visible {
+  outline: 2px solid var(--send-bg);
+  outline-offset: 1px;
+}
+
+/* 已发送用户消息里的附件 */
+.msg-attachments {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+  margin-bottom: 7px;
+}
+
+.msg-attachments::-webkit-scrollbar {
+  display: none;
+}
+
+.msg-attachment {
+  position: relative;
+  flex: none;
+  width: 126px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px;
+  border: 1px solid var(--tool-border);
+  border-radius: 11px;
+  background: var(--tool-bg);
+  color: var(--text);
+  text-align: left;
+}
+
+.msg-attachment.previewable {
+  cursor: pointer;
+}
+
+.msg-attachment.previewable:hover {
+  border-color: var(--tool-border-active);
+}
+
+.msg-attachment .attach-file-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.msg-attachment .attach-file-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.msg-attachment .attach-name {
+  font-size: 10.5px;
+  line-height: 14px;
+}
+
+.msg-attachment .attach-meta {
+  margin-top: 0;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.msg-attachment .attach-thumb {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+}
+
+.msg-user.no-text .bubble {
+  display: none;
+}
+
+/* 附件预览栏 */
+#attachmentPanelTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+.attachment-preview-image {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0 auto;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.attachment-preview-pdf {
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.attachment-preview-text {
+  margin: 0;
+  color: var(--text);
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.attachment-preview-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+  color: var(--placeholder);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.attachment-notice {
+  margin: -2px 1px 7px;
+  padding: 6px 8px;
+  border: 1px solid rgba(242, 90, 90, 0.35);
+  border-radius: 8px;
+  color: #e5484d;
+  background: rgba(242, 90, 90, 0.08);
+  font-size: 10.5px;
+  line-height: 15px;
+}
+
+.attachment-notice[hidden] {
+  display: none;
+}
+
+/* ── 上传附件（设计稿：插入附件功能） ───────────────────────── */
+
+.attachment-tray {
+  padding: 2px 1px 12px;
+}
+
+.attach-card {
+  width: 168px;
+  padding: 8px 10px 8px 9px;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.attach-card:hover {
+  background: var(--hover-bg);
+  border-color: var(--tool-border-active);
+}
+
+.attach-card.image-only {
+  width: 56px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.attach-card.image-only .attach-thumb {
+  width: 100%;
+  height: 56px;
+  border: 0;
+  border-radius: 13px;
+}
+
+.attach-file-icon {
+  width: 28px;
+  height: 28px;
+}
+
+.attach-file-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.attach-name {
+  padding-right: 1px;
+}
+
+.attach-card.is-error {
+  border-color: #f25a5a;
+}
+
+.attach-remove {
+  opacity: 0;
+  pointer-events: none;
+  color: var(--remove-fg);
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+
+.attach-card:hover .attach-remove,
+.attach-card.is-error .attach-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.attach-card.is-error .attach-remove {
+  color: #f25a5a;
+}
+
+/* 对话里的附件：靠右、按行换行，最多占聊天框 85% */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  max-width: 90%;
+  margin-left: auto;
+  margin-bottom: 7px;
+  overflow: visible;
+}
+
+.msg-attachment {
+  width: 168px;
+  height: 56px;
+  padding: 8px 9px;
+  border-radius: 12px;
+  transition: background 0.14s ease, border-color 0.14s ease;
+}
+
+.msg-attachment.image-only {
+  width: 56px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.msg-attachment.image-only .attach-thumb {
+  width: 100%;
+  height: 56px;
+  border: 0;
+  border-radius: 11px;
+}
+
+.msg-attachment.previewable:hover {
+  background: var(--hover-bg);
+  border-color: var(--tool-border-active);
+}
+
+.msg-attachment.is-error {
+  border-color: #f25a5a;
+}
+
+.msg-attachment:disabled {
+  opacity: 1;
+  color: var(--text);
+  cursor: default;
+}
+
+.msg-attachment .attach-file-icon,
+.msg-attachment .attach-file-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.msg-attachment .attach-name {
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+.msg-attachment .attach-meta {
+  margin-top: 2px;
+  font-size: 9.5px;
+  line-height: 13px;
+}
+
+.msg-attachment.is-error .attach-meta {
+  color: #f25a5a;
+}
+
+.attachment-send-error {
+  position: absolute;
+  right: 10px;
+  bottom: 46px;
+  z-index: 8;
+  max-width: calc(100% - 16px);
+  padding: 6px 9px;
+  border: 1px solid var(--composer-border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--composer-bg);
+  box-shadow: var(--shadow-popover);
+  font-size: 10.5px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+
+.attachment-send-error[hidden] {
+  display: none;
+}
+
+
+/* 附件叉图标：圆形底 + 叉；异常态使用深色圆底和红色叉 */
+.attach-remove {
+  top: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  background: var(--remove-bg);
+  color: var(--remove-fg);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.08);
+}
+
+.attach-card.is-error .attach-remove {
+  background: #f25a5a;
+  color: #ffffff;
+}
+
+.attach-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.attach-btn {
+  color: var(--text);
+}
+
+.attachment-send-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attachment-send-error-icon {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+
+.attachment-send-error-icon svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+
+/* 无法解析/没有缩略图的图片：设计稿的文件警告占位图标 */
+.attach-image-placeholder {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--image-placeholder-fg);
+}
+
+.attach-image-placeholder svg {
+  width: 28px;
+  height: 28px;
+  display: block;
+}
+
+
+/* 数字引用角标：在历史接口路径下由 JS 映射到来源链接 */
+.md .md-cite.md-cite-clickable {
+  cursor: pointer;
 }

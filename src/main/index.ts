@@ -1,8 +1,8 @@
-import { app, clipboard, ipcMain, nativeTheme, shell } from 'electron'
+import { app, clipboard, dialog, ipcMain, nativeTheme, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEEPSEEK_URL } from '../shared/constants'
-import { translate, type Language } from '../shared/i18n'
+import { translate, type Language, type MessageKey } from '../shared/i18n'
 import type {
   HistoryEntry,
   HistoryMessage,
@@ -13,8 +13,27 @@ import type {
   SettingsSnapshot,
   ThemeSetting,
   ThinkingInfo,
+  TrayAction,
+  TrayState,
 } from '../shared/types'
 import { setQuitting } from './app-state'
+import {
+  closeAttachmentPreview,
+  createAttachmentBridge,
+  clearHistoryAttachments,
+  clearPendingAttachments,
+  getPendingAttachmentIndex,
+  getPendingAttachments,
+  markAttachmentsSent,
+  removePendingAttachment,
+  setAttachmentPrepareError,
+  setAttachmentPrepared,
+  setAttachmentRetrying,
+  openAttachmentPreview,
+  pickAttachments,
+  pickAttachmentsForTest,
+  registerHistoryAttachments,
+} from './attachments'
 import { writeDomReport } from './deepseek/inspector'
 import { DeepSeekPage, delay, type StreamToken } from './deepseek/page-driver'
 import { buildAppMenu } from './menu'
@@ -28,7 +47,8 @@ import {
   unregisterAllHotkeys,
 } from './shortcut'
 import { StartupFlow } from './startup'
-import { createTray, refreshTrayMenu, trayDebugState } from './tray'
+import { createTray, trayDebugState } from './tray'
+import { GUIDE_STEP, GuideWindow } from './windows/guide-window'
 import { MainWindow } from './windows/main-window'
 import { QuickWindow } from './windows/quick-window'
 import {
@@ -36,6 +56,7 @@ import {
   getSettingsWindow,
   openSettingsWindow,
 } from './windows/settings-window'
+import { TrayMenuWindow } from './windows/tray-menu-window'
 
 // 必须在 ready 之前设置：它决定 userData 落在哪个目录
 app.setName('DS Station')
@@ -111,13 +132,34 @@ console.log(`[语言] 系统首选=${app.getPreferredSystemLanguages?.()[0] ?? '
 
 let mainWindow: MainWindow | null = null
 let quickWindow: QuickWindow | null = null
+let guideWindow: GuideWindow | null = null
+let trayMenuWindow: TrayMenuWindow | null = null
 let startupFlow: StartupFlow | null = null
+
+/** 引导页和状态栏菜单都按需创建；首次显示/点击前不占渲染进程 */
+function ensureGuideWindow(): GuideWindow {
+  if (!guideWindow) guideWindow = new GuideWindow()
+  return guideWindow
+}
+
+function ensureTrayMenuWindow(): TrayMenuWindow {
+  if (!trayMenuWindow) trayMenuWindow = new TrayMenuWindow()
+  return trayMenuWindow
+}
+
+/** DeepSeek 左侧栏底部的账号显示名；失败时菜单里用兜底文案 */
+let cachedAccountName: string | null = null
 
 /**
  * 当前这一轮生成的取消令牌。
  * 用户点「停止生成」时先把它翻成 true，正在跑的轮询会尽快退出。
  */
 let activeToken: StreamToken | null = null
+
+/** 空态选择附件时已经替用户开了新对话；发送时不要重复开 */
+let preparedNewChat = false
+/** 附件准备（插入网页）的进行中 Promise，按附件 id 跟踪 */
+const attachmentPrep = new Map<string, Promise<void>>()
 
 /**
  * 快捷键 / 菜单「呼出快捷窗口」都走这里。
@@ -132,6 +174,38 @@ const toggleQuickWindow = (): void => {
   quickWindow?.toggle()
 }
 
+/** 四段版本号：package.json 前三段 + 构建号 */
+function fullVersion(): string {
+  return `${app.getVersion()}.${String(__BUILD_NUMBER__).padStart(3, '0')}`
+}
+
+/**
+ * 从 DeepSeek 左侧栏底部读取账号显示名。
+ * 页面没登录、侧栏没渲染或结构变了都拿不到，这时保留上一次的值，
+ * 托盘菜单会用「DeepSeek 账号」兜底。
+ */
+async function refreshAccountName(): Promise<void> {
+  if (!mainWindow || !startupFlow?.isLoggedIn) return
+  const page = new DeepSeekPage(mainWindow.pageView)
+  const name = await Promise.race([
+    page.readAccountName(),
+    delay(700).then(() => null),
+  ])
+  if (name) cachedAccountName = name
+}
+
+/** 点击状态栏图标：已登录弹出菜单，未登录显示未关联状态 */
+async function openTrayMenu(): Promise<void> {
+  if (!startupFlow?.isSettled) return
+  const tray = ensureTrayMenuWindow()
+  if (tray.isVisible) {
+    tray.hide()
+    return
+  }
+  if (startupFlow.isLoggedIn && !cachedAccountName) await refreshAccountName()
+  tray.show()
+}
+
 // 单实例锁：双开会让两个进程争抢同一份 persist:deepseek 分区，
 // 轻则登录态错乱，重则分区损坏。
 if (!app.requestSingleInstanceLock()) {
@@ -141,7 +215,10 @@ if (!app.requestSingleInstanceLock()) {
 
   // 只有真正要退出时才允许窗口被销毁（决策 D3）
   app.on('before-quit', () => setQuitting(true))
-  app.on('will-quit', () => unregisterAllHotkeys())
+  app.on('will-quit', () => {
+    unregisterAllHotkeys()
+    void closeAttachmentPreview()
+  })
 
   app.whenReady().then(() => {
     /*
@@ -177,13 +254,20 @@ if (!app.requestSingleInstanceLock()) {
       }
     })
 
-    createTray({ showMainWindow: () => mainWindow?.show() })
+    // 功能引导与状态栏菜单窗口按需创建，启动阶段不占两个渲染进程
+    createTray({ onTrayClick: () => void openTrayMenu() })
 
     // 快捷窗口纯自绘、开销可忽略，直接建好 —— 免得第一次按快捷键要等
     quickWindow = new QuickWindow(
-      () => mainWindow?.isVisible ?? false,
+      () =>
+        (mainWindow?.isVisible ?? false) ||
+        (guideWindow?.isVisible ?? false) ||
+        !!getSettingsWindow() ||
+        (trayMenuWindow?.isVisible ?? false),
       () => void startNewChatOnPage(),
     )
+
+    nativeTheme.on('updated', () => guideWindow?.syncTheme())
 
     /*
      * 快捷窗口内的本地快捷键。
@@ -227,7 +311,12 @@ if (!app.requestSingleInstanceLock()) {
 
     // 登录门禁：未登录显示主窗口，已登录只显示快捷窗口。
     // 主窗口创建时是隐藏的（MainWindow 里 show: false），这里决定要不要露出来。
-    startupFlow = new StartupFlow(mainWindow, quickWindow)
+    startupFlow = new StartupFlow(
+      mainWindow,
+      quickWindow,
+      () => guideWindow,
+      ensureGuideWindow,
+    )
     void startupFlow.start()
 
     // 启动门禁完成前不响应 activate，否则 macOS 启动时补发的 activate
@@ -361,6 +450,16 @@ if (!app.requestSingleInstanceLock()) {
     if (process.env.DS_MD_UI_TEST === '1') {
       runMarkdownUiSelfCheck(quickWindow)
     }
+
+    // 功能引导自检：截图 → 下一步 → 截图 → 开始 → 检查主窗口/登录页
+    if (process.env.DS_GUIDE_TEST === '1') {
+      runGuideSelfCheck(ensureGuideWindow(), mainWindow)
+    }
+
+    // 状态栏菜单自检：打开自绘菜单，截图并检查账号名/版本号
+    if (process.env.DS_TRAY_MENU_TEST === '1') {
+      void runTrayMenuSelfCheck(ensureTrayMenuWindow())
+    }
   })
 
   // macOS 惯例：不因窗口关闭而退出应用。
@@ -373,7 +472,6 @@ if (!app.requestSingleInstanceLock()) {
 // ── 菜单 ────────────────────────────────────────────────────────
 
 function rebuildMenu(): void {
-  refreshTrayMenu()
   buildAppMenu({
     showMainWindow: () => mainWindow?.show(),
     toggleQuickWindow,
@@ -393,8 +491,6 @@ function rebuildMenu(): void {
 // ── IPC ─────────────────────────────────────────────────────────
 
 function registerIpcHandlers(): void {
-  ipcMain.on('ds:open-settings', () => openSettingsWindow())
-
   // 快捷窗口里的 Markdown 链接：只在系统浏览器打开，不允许导航本地面板
   ipcMain.on('ds:open-external', (_event, url: unknown) => {
     if (typeof url !== 'string') return
@@ -409,6 +505,35 @@ function registerIpcHandlers(): void {
   })
   ipcMain.handle('ds:get-version', () => app.getVersion())
   ipcMain.handle('ds:get-messages', () => messages())
+
+  // ── 功能引导 / 状态栏菜单 ─────────────────────────────────
+
+  ipcMain.on('ds:guide-next', () => ensureGuideWindow().setStep(GUIDE_STEP.connect))
+  ipcMain.on('ds:guide-start', () => void handleGuideStart())
+
+  ipcMain.handle(
+    'ds:tray-state',
+    (): TrayState => ({
+      loggedIn: startupFlow?.isLoggedIn ?? false,
+      accountName: startupFlow?.isLoggedIn ? cachedAccountName : null,
+      version: fullVersion(),
+      messages: messages(),
+    }),
+  )
+
+  ipcMain.on('ds:tray-action', (_event, action: unknown) => {
+    if (
+      action === 'open-main' ||
+      action === 'logout' ||
+      action === 'settings' ||
+      action === 'quit' ||
+      action === 'connect'
+    ) {
+      handleTrayAction(action)
+    }
+  })
+
+  ipcMain.on('ds:tray-hide', () => trayMenuWindow?.hide())
 
   ipcMain.handle('ds:get-settings', (): SettingsSnapshot => settingsSnapshot())
   ipcMain.handle('ds:set-hotkey', (_event, accelerator: unknown): HotkeyUpdateResult =>
@@ -444,7 +569,6 @@ function registerIpcHandlers(): void {
       save({ theme })
     }
   })
-  ipcMain.handle('ds:logout', () => handleLogout())
 
   // ── 快捷窗口 ──────────────────────────────────────────────
 
@@ -486,6 +610,158 @@ function registerIpcHandlers(): void {
 
   ipcMain.on('ds:quick-search-panel', (_event, open: unknown) => {
     quickWindow?.setSearchPanel(open === true)
+  })
+
+  ipcMain.handle('ds:pick-attachments', async () => {
+    if (!quickWindow || !mainWindow) {
+      return { attachments: [], rejected: [], error: translate(currentLanguage(), 'quick.attachPreviewFailed') }
+    }
+    const page = new DeepSeekPage(mainWindow.pageView)
+    const accept = await page.readFileAccept()
+    if (!accept) {
+      return { attachments: [], rejected: [], error: translate(currentLanguage(), 'quick.attachPreviewFailed') }
+    }
+    const labels = {
+      title: translate(currentLanguage(), 'quick.attachTitle'),
+      filter: translate(currentLanguage(), 'quick.attachFilter'),
+      button: translate(currentLanguage(), 'quick.attachOpen'),
+    }
+    // 开发自检：DS_ATTACH_TEST=1 时绕过原生文件框
+    const result =
+      process.env.DS_ATTACH_TEST === '1'
+        ? await pickAttachmentsForTest(
+            (process.env.DS_ATTACH_FILES || '').split(':').filter(Boolean),
+            accept,
+            labels,
+          )
+        : await pickAttachments(quickWindow.window, accept, labels)
+    return result
+  })
+
+  ipcMain.handle('ds:import-attachment', async (_event, path: unknown) => {
+    if (!mainWindow || typeof path !== 'string') return { attachments: [], rejected: [] }
+    const page = new DeepSeekPage(mainWindow.pageView)
+    const accept = await page.readFileAccept()
+    if (!accept) return { attachments: [], rejected: [] }
+    return pickAttachmentsForTest([path], accept, {
+      title: translate(currentLanguage(), 'quick.attachTitle'),
+      filter: translate(currentLanguage(), 'quick.attachFilter'),
+      button: translate(currentLanguage(), 'quick.attachOpen'),
+    })
+  })
+
+  ipcMain.on('ds:prepare-attachments', (_event, ids: unknown) => {
+    if (!Array.isArray(ids)) return
+    startAttachmentPreparation(ids.filter((id): id is string => typeof id === 'string'))
+  })
+
+  ipcMain.handle('ds:attachment-statuses', async (_event, ids: unknown) => {
+    if (!mainWindow || !Array.isArray(ids)) return []
+    const wanted = ids.filter((id): id is string => typeof id === 'string')
+    const attachments = getPendingAttachments(wanted)
+    const attachmentById = new Map(attachments.map((attachment) => [attachment.id, attachment]))
+    /*
+     * 注入失败的文件没有输入区卡片；卡片数组只对应成功注入的文件，
+     * 不能再用用户在托盘里的原始下标去取。
+     */
+    const injectedIds = wanted.filter((id) => {
+      const attachment = attachmentById.get(id)
+      return !!attachment && attachment.prepared && !attachment.prepareError
+    })
+    const page = new DeepSeekPage(mainWindow.pageView)
+    const cards = await page.readComposerAttachmentStatuses()
+    return wanted.map((id) => {
+      const attachment = attachmentById.get(id)
+      if (!attachment) return { id, status: 'error', error: '附件已失效' }
+      if (attachment.prepareError) {
+        return {
+          id,
+          status: 'error',
+          error: attachment.prepareError,
+          retryable: attachment.retryable !== false,
+        }
+      }
+      const cardIndex = injectedIds.indexOf(id)
+      const card = cardIndex >= 0 ? cards[cardIndex] : undefined
+      if (!card) return { id, status: 'uploading' }
+      if (card.status === 'error') {
+        let reason = (card.error || '').trim()
+        if (attachment.name && reason.startsWith(attachment.name)) {
+          reason = reason.slice(attachment.name.length).trim()
+        }
+        const error = /未提取|无法提取|no text/i.test(reason)
+          ? '无法提取到文字'
+          : /解析失败|parse|FILE_PARSE|FILE_OVER_SIZE|file.*fail/i.test(reason)
+            ? '解析失败'
+            : /上传失败|upload/i.test(reason)
+              ? '上传失败'
+              : reason || '解析失败'
+        attachment.status = 'error'
+        attachment.error = error
+        attachment.retryable = card.retryable === true
+        return { id, status: 'error', error, retryable: attachment.retryable }
+      }
+      if (card.status === 'uploading') {
+        attachment.status = 'uploading'
+        attachment.retryable = undefined
+        return { id, status: 'uploading' }
+      }
+      attachment.status = 'ready'
+      attachment.error = undefined
+      attachment.retryable = undefined
+      return { id, status: 'ready' }
+    })
+  })
+
+  ipcMain.handle('ds:remove-attachment', async (_event, id: unknown) => {
+    if (!mainWindow || typeof id !== 'string') return
+    const index = getPendingAttachmentIndex(id)
+    const pending = getPendingAttachments([id])[0]
+    if (!pending) return
+    /*
+     * 不等待整批注入队列：排在前面的文件可能还要处理很久。
+     * 先从 pending 移除，队列每处理一个文件前会重新检查它是否还在；
+     * 如果正好在注入过程中被移除，注入完成后队列会删掉刚出现的卡片。
+     */
+    removePendingAttachment(id)
+    attachmentPrep.delete(id)
+    if (index >= 0) {
+      const page = new DeepSeekPage(mainWindow.pageView)
+      await page.removeComposerAttachment(index)
+    }
+  })
+
+  ipcMain.handle('ds:retry-attachment', async (_event, id: unknown) => {
+    if (!mainWindow || typeof id !== 'string') return
+    const attachment = getPendingAttachments([id])[0]
+    if (!attachment) return
+
+    setAttachmentRetrying(id)
+    /*
+     * 已经出现在网页输入区的附件：直接点网页失败卡片左侧的圆形箭头，
+     * 让 DeepSeek 自己重新上传。网页的重试入口只在「上传失败」时出现。
+     */
+    if (attachment.prepared) {
+      const index = getPendingAttachmentIndex(id)
+      if (index >= 0) {
+        const page = new DeepSeekPage(mainWindow.pageView)
+        await page.retryComposerAttachment(index)
+      }
+      return
+    }
+
+    // 我们自己的注入失败：重新走一次 bridge，把单文件塞进输入区
+    startAttachmentPreparation([id])
+  })
+
+  ipcMain.on('ds:quick-attachment-panel', (_event, open: unknown) => {
+    quickWindow?.setAttachmentPanel(open === true)
+    if (open !== true) void closeAttachmentPreview()
+  })
+
+  ipcMain.handle('ds:preview-attachment', async (_event, id: unknown) => {
+    if (typeof id !== 'string') return null
+    return openAttachmentPreview(id)
   })
 
   /*
@@ -667,8 +943,17 @@ async function handleLogout(): Promise<void> {
 
   if (activeToken) activeToken.cancelled = true
 
-  save({ login: { knownLoggedIn: false } })
+  cachedAccountName = null
+  preparedNewChat = false
+  resetAttachmentPreparation()
+  clearPendingAttachments()
+  clearHistoryAttachments()
+  void closeAttachmentPreview()
+  closeSettingsWindow()
+  save({ login: { knownLoggedIn: false }, guide: { introSeen: true } })
+  // onLoggedOut 会收起主窗口 / 快捷窗口，并显示引导页 2
   startupFlow?.onLoggedOut()
+
   // 退出登录：历史列表的内存数据一并清掉
   historyListEpoch += 1
   historyApiItems = null
@@ -678,13 +963,9 @@ async function handleLogout(): Promise<void> {
   quickWindow?.sendEvent({ type: 'conversation-cleared' })
   quickWindow?.setMode('empty')
 
-  // 退出登录后需要重新登录：把主窗口亮出来，面板收起
-  mainWindow?.show()
-  quickWindow?.hide()
-
   try {
-    // 等页面真的切成登录页，再开始监听登录完成，
-    // 否则可能拿旧页面的 DOM 误判成「已经登录」
+    // 页面在后台切回登录页；引导页 2 点「开始」时直接把主窗口亮出来。
+    // 等页面真的切成登录页再开始监听，否则可能拿旧页面误判成「已经登录」。
     await mainWindow?.pageView.webContents.loadURL(DEEPSEEK_URL)
   } catch (err) {
     console.error('[设置] 重新加载登录页失败:', err)
@@ -693,7 +974,161 @@ async function handleLogout(): Promise<void> {
   startupFlow?.watchLogin()
 }
 
+/** 引导页 2 点「开始」：收起引导，显示主窗口的 DeepSeek 登录页 */
+async function handleGuideStart(): Promise<void> {
+  guideWindow?.hide()
+  if (!mainWindow) return
+
+  mainWindow.show()
+
+  const url = mainWindow.pageView.webContents.getURL()
+  if (!/\/sign_in(?:$|[/?#])/.test(url)) {
+    try {
+      await mainWindow.pageView.webContents.loadURL(DEEPSEEK_URL)
+    } catch (err) {
+      console.error('[引导] 打开登录页失败:', err)
+    }
+  }
+
+  startupFlow?.watchLogin()
+}
+
+/** 状态栏菜单动作；菜单窗口先收起，再执行 */
+function handleTrayAction(action: TrayAction): void {
+  trayMenuWindow?.hide()
+
+  switch (action) {
+    case 'open-main':
+      mainWindow?.show()
+      break
+    case 'settings':
+      openSettingsWindow()
+      break
+    case 'quit':
+      app.quit()
+      break
+    case 'logout':
+      void confirmTrayLogout()
+      break
+    case 'connect':
+      ensureGuideWindow().show(GUIDE_STEP.connect)
+      break
+  }
+}
+
+/** 状态栏菜单的退出账号：macOS 原生二次确认 */
+async function confirmTrayLogout(): Promise<void> {
+  const t = (key: MessageKey): string => translate(currentLanguage(), key)
+  app.focus({ steal: true })
+  const { response } = await dialog.showMessageBox({
+    type: 'warning',
+    title: t('tray.logoutTitle'),
+    message: t('tray.logoutTitle'),
+    detail: t('tray.logoutDetail'),
+    buttons: [t('tray.cancel'), t('tray.confirmLogout')],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  })
+
+  if (response === 1) await handleLogout()
+}
+
 // ── 快捷窗口 ↔ DeepSeek 网页 ──────────────────────────────────────
+
+/**
+ * 把一批附件交给网页上传。
+ *
+ * DeepSeek 自己会限制并发（实测同时最多 3 个 upload_file），所以不需要
+ * 在应用层逐个注入。一次 DataTransfer + 一次 change 也是最接近用户
+ * 原生选择多个文件的行为。
+ */
+let attachmentPrepareQueue: Promise<void> = Promise.resolve()
+let attachmentQueueEpoch = 0
+
+/** 切历史/新对话/退出登录时让排队中的注入任务失效 */
+function resetAttachmentPreparation(): void {
+  attachmentQueueEpoch += 1
+  attachmentPrep.clear()
+}
+
+function startAttachmentPreparation(ids: string[]): void {
+  const batch = getPendingAttachments(ids)
+  if (!batch.length) return
+
+  const deferred = new Map<string, () => void>()
+  for (const attachment of batch) {
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => {
+      resolve = done
+    })
+    deferred.set(attachment.id, resolve)
+    attachmentPrep.set(attachment.id, promise)
+  }
+
+  const epoch = attachmentQueueEpoch
+  const task = async (): Promise<void> => {
+    const settle = (id: string): void => {
+      deferred.get(id)?.()
+      deferred.delete(id)
+      attachmentPrep.delete(id)
+    }
+    const win = mainWindow
+    const quick = quickWindow
+    if (!win || !quick) {
+      for (const attachment of batch) settle(attachment.id)
+      return
+    }
+
+    const page = new DeepSeekPage(win.pageView)
+    try {
+      if (epoch !== attachmentQueueEpoch) return
+      if (activeHistoryId) {
+        const target = activeHistoryId
+        activeHistoryId = null
+        await page.switchToHistory(target)
+        await delay(300)
+      } else if (quick.currentMode === 'empty' && !preparedNewChat) {
+        await page.startNewChat()
+        preparedNewChat = true
+        await delay(600)
+      }
+      if (epoch !== attachmentQueueEpoch) return
+
+      const bridge = await createAttachmentBridge(
+        batch.map((attachment) => ({
+          path: attachment.path,
+          name: attachment.name,
+          mime: attachment.mime,
+        })),
+      )
+      try {
+        let injected = false
+        for (let attempt = 0; attempt < 6 && !injected; attempt += 1) {
+          if (epoch !== attachmentQueueEpoch) return
+          injected = await page.attachFiles(bridge.urls)
+          if (!injected) await delay(500)
+        }
+        if (epoch !== attachmentQueueEpoch) return
+        if (!injected) throw new Error('附件没能插入网页')
+        for (const attachment of batch) setAttachmentPrepared(attachment.id)
+      } finally {
+        await bridge.close()
+      }
+    } catch {
+      if (epoch === attachmentQueueEpoch) {
+        for (const attachment of batch) {
+          if (!attachment.prepared) setAttachmentPrepareError(attachment.id, '上传失败')
+        }
+      }
+    } finally {
+      for (const attachment of batch) settle(attachment.id)
+    }
+  }
+
+  const promise = attachmentPrepareQueue.then(task, task)
+  attachmentPrepareQueue = promise
+}
 
 /**
  * 一次完整的提问：同步开关 → 写文字 → 点发送 → 流式读回回答。
@@ -712,16 +1147,25 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
   const viewEpoch = ++quickViewEpoch
 
   try {
+    const attachmentIds = Array.isArray(payload.attachmentIds) ? payload.attachmentIds : []
+    const attachments = getPendingAttachments(attachmentIds)
+    if (attachments.length !== attachmentIds.length) {
+      throw new Error('附件选择已失效，请重新选择')
+    }
+    await Promise.all(attachmentIds.map((id) => attachmentPrep.get(id) ?? Promise.resolve()))
     /*
      * 空态发出的消息 = 新对话的第一条。
      * 必须先把 DeepSeek 切到新会话，否则会接着主窗口里正在看的会话写。
      * 刚启动时页面可能还没就绪，所以输入框用重试的方式等它出现。
      */
-    if (payload.startNewChat) {
+    if (payload.startNewChat && !preparedNewChat) {
       activeHistoryId = null
       const started = await page.startNewChat()
       console.log(`[快捷窗口] 空态发送，开新对话 → ${started ? '成功' : '没找到按钮，直接发'}`)
       await delay(600)
+    } else if (payload.startNewChat && preparedNewChat) {
+      activeHistoryId = null
+      console.log('[快捷窗口] 附件已准备新对话，跳过重复开新对话')
     } else if (activeHistoryId) {
       // 历史预览阶段没有切主页面，真正发消息前把页面切到这条会话
       const target = activeHistoryId
@@ -740,12 +1184,40 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
      */
     await page.installApiHeaderHook()
 
-    let typed = false
-    for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
-      typed = await page.setComposerText(payload.text)
-      if (!typed) await delay(500)
+    if (payload.text) {
+      let typed = false
+      for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
+        typed = await page.setComposerText(payload.text)
+        if (!typed) await delay(500)
+      }
+      if (!typed) throw new Error('没找到输入框，页面可能还没加载好')
+    } else if (!attachments.length) {
+      throw new Error('没有可发送的内容')
     }
-    if (!typed) throw new Error('没找到输入框，页面可能还没加载好')
+
+    if (attachments.length) {
+      const sendable = attachments.filter(
+        (attachment) => !attachment.prepareError && attachment.status !== 'error',
+      )
+      if (!sendable.length) {
+        throw new Error('请删除或重新上传异常文件后再发送')
+      }
+      // 网页可能比快捷窗口的状态轮询更早发现失败，发送前再确认一次
+      const cards = await page.readComposerAttachmentStatuses()
+      if (cards.some((card) => card.status === 'error')) {
+        throw new Error('请删除或重新上传异常文件后再发送')
+      }
+      if (sendable.some((attachment) => attachment.status === 'uploading')) {
+        const ready = await page.waitForAttachments(sendable.length, 15_000)
+        if (!ready) {
+          const latest = await page.readComposerAttachmentStatuses()
+          if (latest.some((card) => card.status === 'error')) {
+            throw new Error('请删除或重新上传异常文件后再发送')
+          }
+          throw new Error('附件正在处理中，请稍候再试')
+        }
+      }
+    }
 
     // 给页面一点时间跑完它自己的状态更新，再点发送
     await delay(350)
@@ -766,8 +1238,14 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     })
 
     if (!(await page.clickSend())) {
+      const cards = await page.readComposerAttachmentStatuses()
+      if (cards.some((card) => card.status === 'error')) {
+        throw new Error('请删除或重新上传异常文件后再发送')
+      }
       throw new Error('没找到发送按钮')
     }
+    preparedNewChat = false
+    markAttachmentsSent(attachmentIds)
 
     quick.sendEvent({ type: 'answer-start' })
 
@@ -1316,6 +1794,12 @@ async function handleHistorySelect(id: string): Promise<void> {
 
   historyOldestKey = messages[0]?.key ?? null
   activeHistoryId = id
+  preparedNewChat = false
+  resetAttachmentPreparation()
+  clearPendingAttachments()
+  clearHistoryAttachments()
+  registerHistoryAttachments(messages)
+  void closeAttachmentPreview()
   quick.sendEvent({ type: 'history-loaded', messages, hasOlder, source: source === 'api' ? 'api' : 'dom' })
 }
 
@@ -1335,6 +1819,7 @@ async function handleHistoryOlder(): Promise<void> {
       quick.sendEvent({ type: 'history-prepended', messages: [], hasOlder: false })
       return
     }
+    registerHistoryAttachments(result.messages)
     if (result.messages.length) {
       historyOldestKey = result.messages[0]?.key ?? historyOldestKey
     }
@@ -1369,6 +1854,12 @@ async function startNewChatOnPage(): Promise<void> {
 
   quickViewEpoch += 1
   activeHistoryId = null
+  preparedNewChat = false
+  resetAttachmentPreparation()
+  clearPendingAttachments()
+  clearHistoryAttachments()
+  void closeAttachmentPreview()
+  quickWindow?.setAttachmentPanel(false)
 
   // 如果上一轮还在生成，先让它停下来，避免旧轮询继续读新会话
   if (activeToken) activeToken.cancelled = true
@@ -1453,7 +1944,7 @@ function runSettingsSelfCheck(): void {
           themeOptions: Array.from(document.getElementById('theme').options).map((o) => o.textContent),
           themeValue: document.getElementById('theme').value,
           version: document.getElementById('version').textContent,
-          logout: document.getElementById('logout').textContent,
+          hasLogout: !!document.getElementById('logout'),
           window: [innerWidth, innerHeight],
         }))()`,
       )
@@ -1487,7 +1978,7 @@ function runSettingsSelfCheck(): void {
           hotkeyLabel: document.getElementById('lbHotkey').textContent,
           resetOptions: Array.from(document.getElementById('resetAfter').options).map((o) => o.textContent),
           languageOptions: Array.from(document.getElementById('language').options).map((o) => o.textContent),
-          logout: document.getElementById('logout').textContent,
+          hasLogout: !!document.getElementById('logout'),
         }))()`,
       )
       console.log('[设置自检] 英文界面:', JSON.stringify(enProbe))
@@ -1611,6 +2102,135 @@ function runFocusSelfCheck(quick: QuickWindow | null): void {
  * 启动门禁自检：打印主窗口/快捷窗口谁可见、登录提示是什么。
  * `DS_FAKE_LOGIN=1` 会模拟一次登录完成，验证「主窗口收起、快捷窗口出现」。
  */
+async function runGuideSelfCheck(
+  guide: GuideWindow | null,
+  main: MainWindow | null,
+): Promise<void> {
+  setTimeout(() => {
+    void (async () => {
+      if (!guide) {
+        console.log('[引导测试] 没有引导窗口')
+        process.exit(1)
+      }
+      const wc = guide.window.webContents
+      const shot = async (name: string): Promise<void> => {
+        try {
+          writeFileSync(`/tmp/${name}.png`, (await wc.capturePage()).toPNG())
+        } catch (error) {
+          console.log(`[引导测试] 截图失败 ${name}:`, String(error))
+        }
+      }
+
+      console.log('[引导测试] 初始:', JSON.stringify({ visible: guide.isVisible, url: wc.getURL() }))
+      await shot('ds-guide-1')
+
+      await wc.executeJavaScript(`document.getElementById('nextBtn').click(); true`)
+      await delay(500)
+      console.log(
+        '[引导测试] 下一步:',
+        JSON.stringify(
+          await wc.executeJavaScript(`({
+            introHidden: document.getElementById('pageIntro').hidden,
+            connectHidden: document.getElementById('pageConnect').hidden,
+          })`),
+        ),
+      )
+      await shot('ds-guide-2')
+
+      await wc.executeJavaScript(`document.getElementById('startBtn').click(); true`)
+      await delay(1200)
+      console.log(
+        '[引导测试] 开始:',
+        JSON.stringify({
+          guideVisible: guide.isVisible,
+          mainVisible: main?.isVisible ?? null,
+          url: main?.pageView.webContents.getURL() ?? null,
+        }),
+      )
+      process.exit(0)
+    })()
+  }, 15_000)
+}
+
+async function runTrayMenuSelfCheck(tray: TrayMenuWindow | null): Promise<void> {
+  await delay(13_000)
+  await openTrayMenu()
+  await delay(800)
+
+  if (!tray?.isVisible) {
+    console.log('[状态栏菜单测试] 菜单没有显示（可能未登录）')
+    process.exit(1)
+  }
+
+  const state = await tray.window.webContents.executeJavaScript(`({
+    connected: document.body.dataset.connected,
+    account: document.getElementById('accountName')?.textContent || '',
+    linked: document.getElementById('linked')?.textContent || '',
+    version: document.getElementById('version')?.textContent || '',
+    openMain: document.getElementById('openMain')?.textContent || '',
+    logout: document.getElementById('logout')?.textContent || '',
+    connect: document.getElementById('connect')?.textContent || '',
+  })`)
+  console.log('[状态栏菜单测试]', JSON.stringify(state))
+
+  try {
+    const focus = await tray.window.webContents.executeJavaScript(`(() => {
+      const el = document.querySelector('[data-action="logout"]');
+      if (el && !el.hidden) el.focus();
+      const active = document.activeElement;
+      const style = active ? getComputedStyle(active) : null;
+      return {
+        action: active?.getAttribute('data-action') || '',
+        outlineStyle: style?.outlineStyle || '',
+        outlineWidth: style?.outlineWidth || '',
+      };
+    })()`)
+    console.log('[状态栏菜单测试] 焦点:', JSON.stringify(focus))
+    writeFileSync(
+      '/tmp/ds-tray-menu-focus.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+    await tray.window.webContents.executeJavaScript(`document.activeElement?.blur(); true`)
+    writeFileSync(
+      '/tmp/ds-tray-menu-dark.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+    nativeTheme.themeSource = 'light'
+    await delay(350)
+    writeFileSync(
+      '/tmp/ds-tray-menu-light.png',
+      (await tray.window.webContents.capturePage()).toPNG(),
+    )
+  } catch (error) {
+    console.log('[状态栏菜单测试] 截图失败:', String(error))
+  }
+
+  // 给外部 screencapture 留出观察位置的窗口
+  await delay(2_000)
+
+  if (state.connected === 'true') {
+    await tray.window.webContents.executeJavaScript(
+      `document.querySelector('[data-action="open-main"]').click(); true`,
+    )
+    await delay(400)
+    console.log(
+      '[状态栏菜单测试] 打开主窗口:',
+      JSON.stringify({ mainVisible: mainWindow?.isVisible ?? null, trayVisible: tray.isVisible }),
+    )
+  } else {
+    await tray.window.webContents.executeJavaScript(
+      `document.querySelector('[data-action="connect"]').click(); true`,
+    )
+    await delay(400)
+    console.log(
+      '[状态栏菜单测试] 立即连接:',
+      JSON.stringify({ guideVisible: guideWindow?.isVisible ?? null, trayVisible: tray.isVisible }),
+    )
+  }
+
+  process.exit(0)
+}
+
 function runStartupSelfCheck(
   win: MainWindow | null,
   quick: QuickWindow | null,
@@ -2983,6 +3603,10 @@ function runApiMarkdownSelfCheck(quick: QuickWindow | null): void {
     '\\frac{1}{2}',
     '\\]',
     '',
+    '```math',
+    '\\frac{1}{3}',
+    '```',
+    '',
     '脚注[^1]',
     '',
     '[^1]: 这是脚注内容',
@@ -3004,25 +3628,59 @@ function runApiMarkdownSelfCheck(quick: QuickWindow | null): void {
   setTimeout(() => {
     void quick.window.webContents
       .executeJavaScript(
-        `(() => ({
-          katex: document.querySelectorAll('.md .katex').length,
-          cites: document.querySelectorAll('.md .md-cite').length,
-          tables: document.querySelectorAll('.md table').length,
-          codeBlocks: document.querySelectorAll('.md .md-code-block').length,
-          codeCopies: document.querySelectorAll('.md .md-code-copy').length,
-          tasks: document.querySelectorAll('.md .task-list-item').length,
-          checkboxes: document.querySelectorAll('.md .task-list-item-checkbox').length,
-          footnotes: document.querySelectorAll('.md .footnotes').length,
-          headings: document.querySelectorAll('.md h2').length,
-          lists: document.querySelectorAll('.md ul').length,
-          quote: document.querySelectorAll('.md blockquote').length,
-        }))()`,
+        `(() => {
+          let katexFontFaces = 0;
+          for (const sheet of Array.from(document.styleSheets)) {
+            let rules = [];
+            try { rules = Array.from(sheet.cssRules || []); } catch (error) {}
+            for (const rule of rules) {
+              if (rule.type === CSSRule.FONT_FACE_RULE && /KaTeX/i.test(rule.cssText)) {
+                katexFontFaces += 1;
+              }
+            }
+          }
+          return {
+            katex: document.querySelectorAll('.md .katex').length,
+            math: document.querySelectorAll('.md math').length,
+            mathBlock: document.querySelectorAll('.md math[display="block"]').length,
+            katexHtml: document.querySelectorAll('.md .katex-html').length,
+            katexDisplay: document.querySelectorAll('.md .katex-display').length,
+            mdMathDisplay: document.querySelectorAll('.md .md-math-display').length,
+            eqn: document.querySelectorAll('.md eqn').length,
+            katexFontFaces,
+            mathFontRequests: performance.getEntriesByType('resource')
+              .filter((entry) => /KaTeX_.*\\.(woff2?|ttf)/.test(entry.name)).length,
+            hljsSpans: document.querySelectorAll('.md pre code.hljs span').length,
+            cites: document.querySelectorAll('.md .md-cite').length,
+            tables: document.querySelectorAll('.md table').length,
+            codeBlocks: document.querySelectorAll('.md .md-code-block').length,
+            codeCopies: document.querySelectorAll('.md .md-code-copy').length,
+            tasks: document.querySelectorAll('.md .task-list-item').length,
+            checkboxes: document.querySelectorAll('.md .task-list-item-checkbox').length,
+            footnotes: document.querySelectorAll('.md .footnotes').length,
+            headings: document.querySelectorAll('.md h2').length,
+            lists: document.querySelectorAll('.md ul').length,
+            quote: document.querySelectorAll('.md blockquote').length,
+          };
+        })()`,
       )
       .then(async (state) => {
         console.log('[API MD测试] ' + JSON.stringify(state))
         try {
           writeFileSync(
             '/tmp/ds-api-md.png',
+            (await quick.window.webContents.capturePage()).toPNG(),
+          )
+          await quick.window.webContents.executeJavaScript(`
+            (() => {
+              const math = document.querySelector('.md-math-display');
+              if (math) math.scrollIntoView({ block: 'center' });
+              return !!math;
+            })()
+          `)
+          await new Promise((resolve) => setTimeout(resolve, 300))
+          writeFileSync(
+            '/tmp/ds-api-md-math.png',
             (await quick.window.webContents.capturePage()).toPNG(),
           )
         } catch (error) {
