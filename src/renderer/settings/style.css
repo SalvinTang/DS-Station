@@ -382,3 +382,12 @@ button.ghost {
 button.ghost:hover {
   background: var(--hover);
 }
+
+
+/* 「重置为新聊天」与上方快捷键框同宽，文字居中 */
+#resetAfter {
+  width: 104px;
+  text-align: center;
+  text-align-last: center;
+  padding-right: 22px;
+}

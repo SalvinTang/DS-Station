@@ -55,7 +55,6 @@ export default defineConfig({
     build: {
       rollupOptions: {
         input: {
-          titlebar: resolve(__dirname, 'src/renderer/titlebar/index.html'),
           quick: resolve(__dirname, 'src/renderer/quick/index.html'),
           settings: resolve(__dirname, 'src/renderer/settings/index.html'),
           guide: resolve(__dirname, 'src/renderer/guide/index.html'),

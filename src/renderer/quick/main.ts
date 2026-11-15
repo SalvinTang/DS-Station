@@ -7,6 +7,9 @@
  */
 
 import type {
+  AttachmentInfo,
+  AttachmentPickResult,
+  AttachmentPreview,
   HistoryEntry,
   HistoryMessage,
   QuickEvent,
@@ -23,6 +26,7 @@ import type {
   ThinkingTextSegment,
 } from '../../shared/types'
 import { renderAiContent, setMarkdownLabels } from './markdown'
+import { formatAttachmentSize } from '../../shared/attachments'
 import { clearMarkdownCache, renderApiMarkdown } from './markdown-render'
 
 const MIN_WINDOW_HEIGHT = 100
@@ -96,6 +100,29 @@ const OPEN_PAGE_ICON = `
     <path d="M8.6 2.4v3.3h3.3M6.3 8h3.4M6.3 10.5h3.4" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"/>
   </svg>`
 
+const FILE_BASE = `<path d="M8.48924 28H19.5108C21.6479 28 22.7165 28 23.5594 27.6509C24.6833 27.1853 25.5762 26.2924 26.0417 25.1685C26.3909 24.3256 26.3909 23.257 26.3909 21.1199V8.79443C26.3909 8.32877 26.3909 8.09593 26.3471 7.87507C26.2887 7.58058 26.173 7.30042 26.0067 7.05048C25.882 6.86303 25.7177 6.69799 25.3893 6.36792L20.0611 1.01354C19.7304 0.681235 19.5651 0.515081 19.3769 0.38885C19.126 0.220541 18.8443 0.103463 18.5481 0.0443412C18.3259 0 18.0915 0 17.6226 0H8.48924C6.35209 0 5.28351 0 4.4406 0.349145C3.31672 0.814671 2.4238 1.70759 1.95828 2.83147C1.60913 3.67438 1.60913 4.74296 1.60913 6.88011V21.1199C1.60913 23.257 1.60913 24.3256 1.95828 25.1685C2.4238 26.2924 3.31672 27.1853 4.4406 27.6509C5.28351 28 6.35209 28 8.48924 28Z" fill="CURRENT_COLOR"></path><path d="M26.3909 7.37445L19.0525 0V3.77445C19.0525 4.89271 19.0525 5.45184 19.2352 5.89289C19.4788 6.48096 19.946 6.94818 20.5341 7.19176C20.9751 7.37445 21.5342 7.37445 22.6525 7.37445H26.3909Z" fill="white" fill-opacity=".7"></path>`
+const FILE_ICONS = {
+  pdf: `<svg viewBox="0 0 28 28" fill="none" aria-hidden="true">${FILE_BASE.replace('CURRENT_COLOR', '#EE5138')}<path d="M58.7034 18.7826C57.7262 18.7103 56.7852 18.3483 56.0251 17.6969C54.5412 18.0226 53.1297 18.4931 51.7182 19.0722C50.5962 21.0628 49.5466 22.0762 48.6418 22.0762C48.4608 22.0762 48.2437 22.04 48.0989 21.9314C47.7008 21.7505 47.4836 21.3523 47.4836 20.9542C47.4836 20.6285 47.556 19.7237 50.9943 18.2398C51.7906 16.7921 52.4058 15.3082 52.9125 13.7519C52.4782 12.8832 51.5372 10.7479 52.1887 9.66209C52.4058 9.26397 52.8402 9.04682 53.3107 9.08301C53.6726 9.08301 54.0345 9.26397 54.2517 9.55351C54.7222 10.205 54.686 11.5803 54.0707 13.6071C54.6498 14.6929 55.4098 15.6701 56.3147 16.5025C57.0747 16.3577 57.8348 16.2492 58.5948 16.2492C60.2959 16.2854 60.5492 17.0816 60.513 17.5521C60.513 18.7826 59.3187 18.7826 58.7034 18.7826ZM48.5694 21.0266L48.678 20.9904C49.1847 20.8094 49.5828 20.4475 49.8724 19.977C49.3295 20.1942 48.8952 20.5561 48.5694 21.0266ZM53.3831 10.1688H53.2745C53.2383 10.1688 53.1659 10.1688 53.1297 10.205C52.9849 10.8203 53.0935 11.4717 53.3469 12.0508C53.564 11.4355 53.564 10.7841 53.3831 10.1688ZM53.6364 15.4167L53.6002 15.4891L53.564 15.4529C53.2383 16.2854 52.8764 17.1178 52.4782 17.914L52.5506 17.8778V17.9502C53.3469 17.6607 54.2155 17.4073 55.0117 17.2264L54.9755 17.1902H55.0841C54.5412 16.6473 54.0345 16.032 53.6364 15.4167ZM58.5586 17.3349C58.2329 17.3349 57.9433 17.3349 57.6176 17.4073C57.9795 17.5883 58.3415 17.6607 58.7034 17.6969C58.9567 17.7331 59.2101 17.6969 59.4272 17.6245C59.4272 17.5159 59.2825 17.3349 58.5586 17.3349Z" fill="white" transform="translate(-40)"></path></svg>`,
+  doc: `<svg viewBox="0 0 28 28" fill="none" aria-hidden="true">${FILE_BASE.replace('CURRENT_COLOR', '#418CFF')}<path d="M8.10132 12.6846H19.8948" stroke="white" stroke-width="1.6"></path><path d="M8.10132 16.4688H19.8948" stroke="white" stroke-width="1.6"></path><path d="M8.10132 20.252H16.0199" stroke="white" stroke-width="1.6"></path></svg>`,
+  sheet: `<svg viewBox="0 0 28 28" fill="none" aria-hidden="true">${FILE_BASE.replace('CURRENT_COLOR', '#3FB67F')}<g fill="white"><rect x="9.3879" y="11.6172" width="4.24569" height="4.24569" rx=".458674"></rect><rect x="9.3879" y="16.5879" width="4.24569" height="4.24569" rx=".458674"></rect><rect x="14.3665" y="11.6172" width="4.24569" height="4.24569" rx=".458674"></rect><rect x="14.3665" y="16.5879" width="4.24569" height="4.24569" rx=".458674"></rect></g></svg>`,
+  presentation: `<svg viewBox="0 0 28 28" fill="none" aria-hidden="true">${FILE_BASE.replace('CURRENT_COLOR', '#FB8E34')}<g fill="white"><path d="M12.922 21.2661C15.337 21.2661 17.294 19.3088 17.294 16.8943H12.922V12.5225C10.508 12.5225 8.55 14.4798 8.55 16.8943C8.55 19.3088 10.508 21.2661 12.922 21.2661Z"></path><path d="M14.089 10.3672C17.049 10.3672 19.45 12.7674 19.45 15.7283H14.089V10.3672Z"></path></g></svg>`,
+}
+const IMAGE_PLACEHOLDER_ICON = `
+  <svg viewBox="0 0 1244 1024" fill="none" aria-hidden="true">
+    <path d="M986.634334 512.851913a255.574043 255.574043 0 1 0 255.574043 255.574044 255.574043 255.574043 0 0 0-255.574043-255.574044z m22.22383 405.525632h-44.44766v-63.774984h44.44766z m0-118.215959h-44.44766V608.621804h44.44766z" fill="currentColor"></path>
+    <path d="M642.179787 768.396325a343.528554 343.528554 0 0 1 71.990393-210.430037l-345.95095-308.17044L88.895319 541.298416V177.790639a88.895319 88.895319 0 0 1 88.89532-88.89532h888.805035a88.895319 88.895319 0 0 1 88.895319 88.89532v290.650654a343.728568 343.728568 0 0 1 88.89532 71.997801V177.790639a177.790639 177.790639 0 0 0-177.790639-177.790639H177.790639A177.790639 177.790639 0 0 0 0 177.790639v666.618592a177.790639 177.790639 0 0 0 177.790639 177.790639h577.738088a342.869247 342.869247 0 0 1-113.341532-253.759097z" fill="currentColor"></path>
+  </svg>`
+/** 和 DeepSeek 网页失败卡片完全相同的圆形箭头重试图标 */
+const RETRY_ICON = `
+  <svg viewBox="0 0 16 16" width="26" height="26" fill="none" aria-hidden="true">
+    <path d="M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052 13.9557 3.29894L15.1281 2.12759C15.3303 1.92546 15.6767 2.06943 15.6767 2.35538V5.53923C15.6766 5.71626 15.5329 5.85976 15.3559 5.86002H12.171C11.8854 5.8597 11.7426 5.51465 11.9443 5.31249L12.9641 4.29056C11.8237 2.74305 9.98908 1.74106 7.92136 1.74097C4.46436 1.74097 1.66233 4.543 1.66233 8C1.66233 11.457 4.46436 14.259 7.92136 14.259C11.3782 14.2589 14.1804 11.4569 14.1804 8H15.5722C15.5722 12.2251 12.1465 15.6507 7.92136 15.6508C3.69614 15.6508 0.270508 12.2252 0.270508 8C0.270508 3.77478 3.69614 0.349152 7.92136 0.349152Z" fill="currentColor"/>
+  </svg>`
+
+const CLOSE_ICON = `
+  <svg viewBox="0 0 14 14" width="10" height="10" fill="currentColor" aria-hidden="true">
+    <path d="M3.1 1.7 7 5.6l3.9-3.9 1.4 1.4L8.4 7l3.9 3.9-1.4 1.4L7 8.4l-3.9 3.9-1.4-1.4L5.6 7 1.7 3.1z" />
+  </svg>`
+
 /** 默认发送图标（向上箭头）。HTML 里也有一份，状态切换时用这里覆盖 */
 const SEND_ICON = `
   <svg viewBox="0 0 20 20" width="12" height="12" aria-hidden="true">
@@ -140,6 +167,10 @@ function applyMessages(): void {
   if (historyLabel) historyLabel.textContent = t('quick.history')
   if (historyEmpty) historyEmpty.textContent = t('quick.noHistory')
   if (searchPanelTitle) searchPanelTitle.textContent = t('quick.searchResults')
+  if (attachmentPanelClose) {
+    attachmentPanelClose.title = t('quick.searchCollapse')
+    attachmentPanelClose.setAttribute('aria-label', t('quick.searchCollapse'))
+  }
   if (searchPanelClose) {
     searchPanelClose.title = t('quick.searchCollapse')
     searchPanelClose.setAttribute('aria-label', t('quick.searchCollapse'))
@@ -151,6 +182,7 @@ function applyMessages(): void {
     [smartSearchButton, 'quick.smartSearch'],
     [historyButton, 'quick.history'],
     [sendButton, 'quick.send'],
+    [attachButton, 'quick.attach'],
     [scrollBottomButton, 'quick.scrollBottom'],
     [tbClose, 'quick.close'],
     [tbNewChat, 'quick.newChat'],
@@ -178,6 +210,15 @@ const messagesInner = document.getElementById('messagesInner') as HTMLElement
 const messagesTail = document.getElementById('messagesTail') as HTMLElement
 const messagesFade = document.getElementById('messagesFade') as HTMLElement
 const composer = document.querySelector('.composer') as HTMLElement
+const attachmentTray = document.getElementById('attachmentTray') as HTMLElement
+const attachmentNotice = document.getElementById('attachmentNotice') as HTMLElement
+const attachmentSendError = document.getElementById('attachmentSendError') as HTMLElement
+const attachmentSendErrorText = document.getElementById('attachmentSendErrorText') as HTMLElement
+const attachButton = document.getElementById('attach') as HTMLButtonElement
+const attachmentPanel = document.getElementById('attachmentPanel') as HTMLElement
+const attachmentPanelTitle = document.getElementById('attachmentPanelTitle') as HTMLElement
+const attachmentPanelClose = document.getElementById('attachmentPanelClose') as HTMLButtonElement
+const attachmentPanelBody = document.getElementById('attachmentPanelBody') as HTMLElement
 
 const input = document.getElementById('input') as HTMLTextAreaElement
 const deepThinkButton = document.getElementById('deepThink')
@@ -206,6 +247,15 @@ const searchPanelList = document.getElementById('searchPanelList') as HTMLElemen
 
 /** 右侧搜索结果栏是否展开 */
 let searchPanelOpen = false
+/** 本地待发送附件 */
+let attachments: AttachmentInfo[] = []
+/** 刚点发送、还没收到 answer-start 的附件；发送前置失败时用来恢复托盘 */
+let pendingSubmission: AttachmentInfo[] | null = null
+/** 右侧附件预览栏 */
+let attachmentPanelOpen = false
+let activeAttachmentId: string | null = null
+let attachmentPanelToken = 0
+let attachPicking = false
 /** 当前搜索栏对应的消息组 */
 let activeSearchGroup: HTMLElement | null = null
 /** 消息组对应的搜索结果，用于回答结束后补上底部胶囊 */
@@ -222,7 +272,8 @@ let activeSearchIndex: number | undefined
 const SEARCH_PANEL_WIDTH = 260
 
 /** 快捷窗口加宽/收窄时，左侧内容区宽度保持固定，避免底部气泡左右移动 */
-function syncAppWidth(panelOpen = searchPanelOpen): void {
+function syncAppWidth(): void {
+  const panelOpen = searchPanelOpen || attachmentPanelOpen
   const width = panelOpen ? window.innerWidth - SEARCH_PANEL_WIDTH : window.innerWidth
   app.style.width = `${Math.max(0, Math.round(width))}px`
 }
@@ -279,19 +330,26 @@ let topbarTimer: number | undefined
 function autosize(): void {
   input.style.height = 'auto'
   const natural = input.scrollHeight
-  const height = Math.min(Math.max(natural, TEXTAREA_MIN), TEXTAREA_MAX)
+  const trayHeight = attachmentTray.hidden ? 0 : attachmentTray.offsetHeight
+  // 空态窗口最高 200：有附件托盘时要把输入框上限让出来，否则整个 composer 会溢出
+  const maxInput =
+    mode === 'empty' && trayHeight > 0
+      ? Math.max(TEXTAREA_MIN, MAX_WINDOW_HEIGHT - COMPOSER_CHROME - trayHeight)
+      : TEXTAREA_MAX
+  const height = Math.min(Math.max(natural, TEXTAREA_MIN), maxInput)
 
   input.style.height = `${height}px`
   // 达到上限后不再长高，改为出滚动条（设计稿原文）
   input.style.overflowY = natural > height ? 'auto' : 'hidden'
 
   if (mode === 'empty') {
-    // 空态：窗口跟着一起长高（输入框 + 固定开销），夹在 100–200 之间。
+    // 空态：附件托盘让窗口在基础高度上再向上顶出 70px，夹在 100–200 之间。
     // 主进程负责保持底边不动、只把顶边上移
-    const windowHeight = Math.min(
+    const baseHeight = Math.min(
       MAX_WINDOW_HEIGHT,
       Math.max(MIN_WINDOW_HEIGHT, COMPOSER_CHROME + height),
     )
+    const windowHeight = Math.min(MAX_WINDOW_HEIGHT, baseHeight + trayHeight)
     window.ds?.resizeQuickWindow(windowHeight)
   }
 
@@ -313,8 +371,19 @@ function syncSendState(): void {
   sendButton.setAttribute('aria-label', t(key))
 
   // 生成中：发送按钮就是停止按钮，始终可点
-  // 空闲时：没有内容、或正在加载历史对话就禁用
-  sendButton.disabled = historyLoading || (!busy && input.value.trim().length === 0)
+  // 空闲时：没有文字也没有附件、或正在加载历史对话就禁用
+  const hasAttachmentError = attachments.some((attachment) => attachment.status === 'error')
+  sendButton.disabled =
+    historyLoading ||
+    Date.now() < attachmentSendBlockedUntil ||
+    (!busy && hasAttachmentError) ||
+    (!busy && input.value.trim().length === 0 && attachments.length === 0)
+
+  attachButton.disabled =
+    busy || stopping || historyLoading || attachPicking || attachments.length >= 20
+  attachButton.title =
+    attachments.length >= 20 ? t('quick.attachLimit') : t('quick.attach')
+  attachButton.setAttribute('aria-label', attachButton.title)
 }
 
 /**
@@ -336,6 +405,354 @@ function togglePressed(element: Element | null): void {
   element?.setAttribute('aria-pressed', String(!isPressed(element)))
 }
 
+// ── 上传附件 ──────────────────────────────────────────────────
+
+function attachmentMeta(attachment: AttachmentInfo): string {
+  const label = attachment.ext ? attachment.ext.toLowerCase() : 'file'
+  return `${label} ${formatAttachmentSize(attachment.size)}`
+}
+
+function attachmentFailureText(attachment: AttachmentInfo): string {
+  let raw = (attachment.error || '').trim()
+  if (attachment.name && raw.startsWith(attachment.name)) {
+    raw = raw.slice(attachment.name.length).trim()
+  }
+  if (/未提取|无法提取|no text/i.test(raw)) return t('quick.attachNoText')
+  if (/上传失败|upload/i.test(raw)) return t('quick.attachUploadFailed')
+  if (/解析失败|parse|FILE_PARSE|FILE_OVER_SIZE|file.*fail/i.test(raw)) {
+    return t('quick.attachParseFailed')
+  }
+  return raw || t('quick.attachParseFailed')
+}
+
+function attachmentStatusText(attachment: AttachmentInfo): string {
+  if (attachment.status === 'error') return attachmentFailureText(attachment)
+  if (attachment.status === 'uploading' || attachment.status === 'parsing') {
+    return t('quick.attachUploading')
+  }
+  return attachmentMeta(attachment)
+}
+
+function attachmentIconType(attachment: AttachmentInfo): keyof typeof FILE_ICONS {
+  const ext = attachment.ext.toLowerCase()
+  if (ext === 'pdf') return 'pdf'
+  if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') return 'sheet'
+  if (ext === 'ppt' || ext === 'pptx') return 'presentation'
+  return 'doc'
+}
+
+function makeAttachmentIcon(attachment: AttachmentInfo): HTMLElement {
+  const icon = document.createElement('span')
+  icon.className = 'attach-file-icon'
+  icon.innerHTML = FILE_ICONS[attachmentIconType(attachment)]
+  return icon
+}
+
+/** 上传失败卡片左侧的圆形箭头；和 DeepSeek 网页使用同一个路径 */
+function makeRetryIcon(): HTMLElement {
+  const icon = document.createElement('span')
+  icon.className = 'attach-file-icon attach-retry-icon'
+  icon.title = t('quick.attachRetry')
+  icon.setAttribute('aria-label', t('quick.attachRetry'))
+  icon.innerHTML = RETRY_ICON
+  return icon
+}
+
+function makeImagePlaceholder(): HTMLElement {
+  const icon = document.createElement('span')
+  icon.className = 'attach-image-placeholder'
+  icon.innerHTML = IMAGE_PLACEHOLDER_ICON
+  return icon
+}
+
+function makeAttachmentThumb(attachment: AttachmentInfo): HTMLElement {
+  const thumb = document.createElement('div')
+  thumb.className = 'attach-thumb'
+  const image = document.createElement('img')
+  image.src = attachment.thumbnailUrl || ''
+  image.alt = ''
+  thumb.appendChild(image)
+  return thumb
+}
+
+function applyImageWidth(card: HTMLElement, image: HTMLImageElement): void {
+  const update = (): void => {
+    if (!image.naturalWidth || !image.naturalHeight) return
+    const width = Math.min(168, Math.max(56, Math.round((56 * image.naturalWidth) / image.naturalHeight)))
+    card.style.width = `${width}px`
+  }
+  if (image.complete) update()
+  else image.addEventListener('load', update, { once: true })
+}
+
+function makeAttachmentCard(attachment: AttachmentInfo, options: { removable?: boolean } = {}): HTMLElement {
+  const card = document.createElement('div')
+  card.className = 'attach-card'
+  card.dataset.attachmentId = attachment.id
+  const retryable = attachment.status === 'error' && attachment.retryable === true
+  if (attachment.status === 'error') card.classList.add('is-error')
+  if (retryable) {
+    card.classList.add('is-retryable')
+    card.title = t('quick.attachRetry')
+  }
+  if (attachment.status === 'uploading' || attachment.status === 'parsing') {
+    card.classList.add('is-uploading')
+  }
+
+  if (attachment.kind === 'image') {
+    card.classList.add('image-only')
+    if (retryable) {
+      card.classList.add('image-placeholder')
+      card.appendChild(makeRetryIcon())
+    } else if (attachment.thumbnailUrl && attachment.status !== 'error') {
+      const thumb = makeAttachmentThumb(attachment)
+      const image = thumb.querySelector('img') as HTMLImageElement
+      image.addEventListener('error', () => {
+        thumb.replaceWith(makeImagePlaceholder())
+        card.classList.add('image-placeholder')
+      }, { once: true })
+      card.appendChild(thumb)
+      applyImageWidth(card, image)
+    } else {
+      card.classList.add('image-placeholder')
+      card.appendChild(makeImagePlaceholder())
+    }
+  } else {
+    card.appendChild(retryable ? makeRetryIcon() : makeAttachmentIcon(attachment))
+    const info = document.createElement('div')
+    info.className = 'attach-info'
+    const name = document.createElement('div')
+    name.className = 'attach-name'
+    name.textContent = attachment.name
+    const meta = document.createElement('div')
+    meta.className = 'attach-meta'
+    meta.textContent = attachmentStatusText(attachment)
+    info.append(name, meta)
+    card.appendChild(info)
+  }
+
+  if (retryable && options.removable) {
+    card.addEventListener('click', () => retryAttachment(attachment))
+  }
+
+  if (options.removable) {
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'attach-remove'
+    remove.title = t('quick.attachRemove')
+    remove.setAttribute('aria-label', t('quick.attachRemove'))
+    remove.innerHTML = CLOSE_ICON
+    remove.addEventListener('click', (event) => {
+      event.stopPropagation()
+      removeAttachment(attachment.id)
+    })
+    card.appendChild(remove)
+  }
+  return card
+}
+
+function makeMessageAttachmentCard(attachment: AttachmentInfo): HTMLElement {
+  const card = document.createElement('button')
+  card.type = 'button'
+  card.className = 'msg-attachment'
+  card.dataset.attachmentId = attachment.id
+  const clickable = attachment.previewable && attachment.status !== 'error'
+  if (attachment.status === 'error') card.classList.add('is-error')
+  if (attachment.kind === 'image') {
+    card.classList.add('image-only')
+    if (attachment.thumbnailUrl && attachment.status !== 'error') {
+      const thumb = makeAttachmentThumb(attachment)
+      const image = thumb.querySelector('img') as HTMLImageElement
+      image.addEventListener('error', () => {
+        thumb.replaceWith(makeImagePlaceholder())
+        card.classList.add('image-placeholder')
+      }, { once: true })
+      card.appendChild(thumb)
+      applyImageWidth(card, image)
+    } else {
+      card.classList.add('image-placeholder')
+      card.appendChild(makeImagePlaceholder())
+    }
+  } else {
+    card.appendChild(makeAttachmentIcon(attachment))
+    const info = document.createElement('div')
+    info.className = 'attach-info'
+    const name = document.createElement('div')
+    name.className = 'attach-name'
+    name.textContent = attachment.name
+    const meta = document.createElement('div')
+    meta.className = 'attach-meta'
+    meta.textContent = attachmentStatusText(attachment)
+    info.append(name, meta)
+    card.appendChild(info)
+  }
+  if (clickable) {
+    card.classList.add('previewable')
+    card.addEventListener('click', () => void openAttachmentPreview(attachment))
+  } else {
+    card.disabled = true
+  }
+  return card
+}
+
+function buildSentAttachments(attachmentList: AttachmentInfo[]): HTMLElement | null {
+  if (!attachmentList.length) return null
+  const row = document.createElement('div')
+  row.className = 'msg-attachments'
+  for (const attachment of attachmentList) row.appendChild(makeMessageAttachmentCard(attachment))
+  return row
+}
+
+let attachmentNoticeTimer = 0
+let attachmentSendErrorTimer = 0
+let attachmentSendBlockedUntil = 0
+let attachmentStatusTimer = 0
+/** 刚添加附件后继续轮询一段时间，等网页把“解析中/无法提取”最终状态写出来 */
+let attachmentStatusUntil = 0
+
+function showAttachmentNotice(message: string): void {
+  attachmentNotice.textContent = message
+  attachmentNotice.hidden = false
+  window.clearTimeout(attachmentNoticeTimer)
+  attachmentNoticeTimer = window.setTimeout(() => {
+    attachmentNotice.hidden = true
+  }, 4200)
+}
+
+function showAttachmentSendError(): void {
+  attachmentSendErrorText.textContent = t('quick.attachResolveError')
+  attachmentSendError.hidden = false
+  attachmentSendBlockedUntil = Date.now() + 2000
+  sendButton.disabled = true
+  window.clearTimeout(attachmentSendErrorTimer)
+  attachmentSendErrorTimer = window.setTimeout(() => {
+    attachmentSendError.hidden = true
+    attachmentSendBlockedUntil = 0
+    syncSendState()
+  }, 2000)
+}
+
+function renderAttachmentTray(): void {
+  attachmentTray.replaceChildren()
+  for (const attachment of attachments) {
+    attachmentTray.appendChild(makeAttachmentCard(attachment, { removable: true }))
+  }
+  attachmentTray.hidden = attachments.length === 0
+  autosize()
+  syncSendState()
+}
+
+function scheduleAttachmentStatusPoll(): void {
+  if (attachmentStatusTimer) return
+  const tick = async (): Promise<void> => {
+    attachmentStatusTimer = 0
+    const waiting =
+      attachments.some((attachment) => attachment.status === 'uploading' || attachment.status === 'parsing') ||
+      Date.now() < attachmentStatusUntil
+    if (!waiting) return
+    const ids = attachments.map((attachment) => attachment.id)
+    const updates = await window.ds?.getAttachmentStatuses(ids)
+    if (!updates?.length) {
+      attachmentStatusTimer = window.setTimeout(tick, 600)
+      return
+    }
+    const byId = new Map(updates.map((update) => [update.id, update]))
+    let changed = false
+    attachments = attachments.map((attachment) => {
+      const update = byId.get(attachment.id)
+      if (!update) return attachment
+      if (
+        attachment.status === update.status &&
+        attachment.error === update.error &&
+        attachment.retryable === update.retryable
+      ) {
+        return attachment
+      }
+      changed = true
+      return {
+        ...attachment,
+        status: update.status,
+        error: update.error,
+        retryable: update.retryable,
+      }
+    })
+    // 状态没变时绝不重建卡片，否则鼠标悬浮会被 500ms 轮询打断
+    if (changed) renderAttachmentTray()
+    const stillWaiting =
+      attachments.some((attachment) => attachment.status === 'uploading' || attachment.status === 'parsing') ||
+      Date.now() < attachmentStatusUntil
+    if (stillWaiting) attachmentStatusTimer = window.setTimeout(tick, 500)
+  }
+  attachmentStatusTimer = window.setTimeout(() => void tick(), 400)
+}
+
+function retryAttachment(attachment: AttachmentInfo): void {
+  if (attachment.status !== 'error' || !attachment.retryable) return
+  attachment.status = 'uploading'
+  attachment.error = undefined
+  attachment.retryable = undefined
+  attachmentStatusUntil = Date.now() + 30_000
+  renderAttachmentTray()
+  scheduleAttachmentStatusPoll()
+  void window.ds?.retryAttachment(attachment.id)
+}
+
+function removeAttachment(id: string): void {
+  attachments = attachments.filter((attachment) => attachment.id !== id)
+  if (activeAttachmentId === id) closeAttachmentPanel()
+  void window.ds?.removeAttachment(id)
+  renderAttachmentTray()
+}
+
+function clearAttachments(): void {
+  attachments = []
+  pendingSubmission = null
+  attachmentStatusUntil = 0
+  attachmentNotice.hidden = true
+  attachmentSendError.hidden = true
+  attachmentTray.replaceChildren()
+  attachmentTray.hidden = true
+  closeAttachmentPanel()
+  syncSendState()
+}
+
+function appendAcceptedAttachments(result: AttachmentPickResult, notifyRejected: boolean): void {
+  const remaining = Math.max(0, 20 - attachments.length)
+  const accepted = result.attachments.slice(0, remaining)
+  attachments.push(...accepted)
+  if (accepted.length) window.ds?.prepareAttachments(accepted.map((attachment) => attachment.id))
+  if (notifyRejected && (result.rejected.length || result.attachments.length > accepted.length)) {
+    const count = result.rejected.length + Math.max(0, result.attachments.length - accepted.length)
+    showAttachmentNotice(t('quick.attachRejected', { n: count }))
+  }
+  if (!accepted.length) return
+  attachmentStatusUntil = Date.now() + 30_000
+  renderAttachmentTray()
+  scheduleAttachmentStatusPoll()
+}
+
+async function pickAttachments(): Promise<void> {
+  if (attachPicking || busy || stopping || historyLoading) return
+  if (attachments.length >= 20) {
+    showAttachmentNotice(t('quick.attachLimit'))
+    return
+  }
+  attachPicking = true
+  syncSendState()
+  try {
+    const result = await window.ds?.pickAttachments()
+    if (!result) return
+    if (result.error) {
+      showAttachmentNotice(result.error)
+      return
+    }
+    appendAcceptedAttachments(result, true)
+  } finally {
+    attachPicking = false
+    syncSendState()
+  }
+}
+
 // ── 历史对话弹框 ─────────────────────────────────────────────
 
 /** 把弹框贴到输入框正上方（输入框高度变化时也要重新算） */
@@ -344,6 +761,7 @@ function placeMessagesFade(): void {
   const appRect = app.getBoundingClientRect()
   const composerRect = composer.getBoundingClientRect()
   const appBottom = appRect.top + app.clientTop + app.clientHeight
+  // 渐变层底边贴在「消息内容」和输入区外框的交接位置。
   messagesFade.style.bottom = `${Math.round(appBottom - composerRect.top)}px`
 }
 
@@ -635,14 +1053,37 @@ function alignAnswerBodyToTop(body: HTMLElement): void {
 }
 
 
+/** 滚动条本身已经到底（包含 messagesTail 补位） */
+function isAtRawBottom(): boolean {
+  return messages.scrollTop + messages.clientHeight >= messages.scrollHeight - 2
+}
+
+/**
+ * 用户已经滚到最底部时，把补位空间收掉。
+ * 否则用户会把最后一条回答底部和输入框之间的空白一路滑出来，
+ * 看起来像还能继续往下滚。
+ */
+function collapseTailAtBottom(): void {
+  if (busy || streamingBody) return
+  if (!messagesTail.offsetHeight) return
+  if (!isAtRawBottom()) return
+  messagesTail.style.height = '0px'
+  updateScrollButton()
+}
+
 /**
  * 回答结束：尽量收回补位空间。
  *
  * 只收到「不会让当前视图被夹走」的程度 —— 如果回答很短、内容底部撑不满视口，
  * 全部收回会让浏览器把 scrollTop 夹到新的最大值，用户刚顶到上面的消息会往下跳。
  * 留刚好够的那一点点空白，视图就保持不动。
+ * 但如果用户本来就在最底部，就必须直接收回，不能留下可继续下滑的空白。
  */
 function releaseTail(): void {
+  if (isAtRawBottom()) {
+    messagesTail.style.height = '0px'
+    return
+  }
   const keep = messages.scrollTop + messages.clientHeight - contentBottom()
   messagesTail.style.height = `${Math.max(0, keep)}px`
 }
@@ -1292,9 +1733,11 @@ function openSearchPanel(
   if (hasDetails) renderSearchPanel(info)
   else renderSearchLoading()
 
+  const hadAttachment = attachmentPanelOpen
+  if (hadAttachment) closeAttachmentPanel(true)
   if (!searchPanelOpen) {
     // 先固定左侧内容宽度，再显示结果栏；主进程随后加宽窗口时内容不会被拉伸
-    app.style.width = `${window.innerWidth}px`
+    app.style.width = `${Math.max(0, window.innerWidth - (hadAttachment ? SEARCH_PANEL_WIDTH : 0))}px`
     searchPanelOpen = true
     searchPanel.hidden = false
     shell.classList.add('search-open')
@@ -1306,6 +1749,8 @@ function openSearchPanel(
   // 每次打开、或切换到另一条回答的搜索结果，都从顶部开始看
   searchPanelList.scrollTop = 0
   window.ds?.setSearchPanel(true)
+  // 切换栏时不要让窗口先缩再展开；主进程此时已经是 search 状态，只关闭附件预览服务
+  if (hadAttachment) window.ds?.setAttachmentPanel(false)
 
   if (!hasDetails) {
     const answerIndex = groupAnswerIndex.get(group)
@@ -1315,22 +1760,24 @@ function openSearchPanel(
   }
 }
 
-function closeSearchPanel(): void {
+function closeSearchPanel(keepWindow = false): void {
   if (!searchPanelOpen && searchPanel.hidden) return
   // 关闭后不再继续重试拉取
   searchDetailsToken += 1
-  if (searchPanelOpen) {
-    // 先把左侧内容宽度收回到 420，再移除结果栏并让主进程缩窗口
-    app.style.width = `${Math.max(0, window.innerWidth - SEARCH_PANEL_WIDTH)}px`
+  if (!keepWindow) {
+    if (searchPanelOpen) {
+      // 先把左侧内容宽度收回到 420，再移除结果栏并让主进程缩窗口
+      app.style.width = `${Math.max(0, window.innerWidth - SEARCH_PANEL_WIDTH)}px`
+    }
+    shell.classList.remove('search-open')
+    window.ds?.setSearchPanel(false)
   }
   searchPanelOpen = false
   activeSearchGroup = null
   activeSearchIndex = undefined
-  shell.classList.remove('search-open')
   searchPanel.hidden = true
   searchPanelList.classList.remove('is-placeholder')
   searchPanelList.replaceChildren()
-  window.ds?.setSearchPanel(false)
 }
 
 function toggleSearchPanel(
@@ -1349,7 +1796,191 @@ function toggleSearchPanel(
   openSearchPanel(group, info, searchIndex)
 }
 
-searchPanelClose.addEventListener('click', closeSearchPanel)
+searchPanelClose.addEventListener('click', () => closeSearchPanel())
+
+// ── 附件预览栏 ────────────────────────────────────────────────
+
+function attachmentPreviewPlaceholder(text: string): void {
+  const box = document.createElement('div')
+  box.className = 'attachment-preview-placeholder'
+  box.textContent = text
+  attachmentPanelBody.replaceChildren(box)
+}
+
+function makePreviewImage(src: string, name: string): HTMLImageElement {
+  const image = document.createElement('img')
+  image.className = 'attachment-preview-image'
+  image.alt = name
+  image.src = src
+  return image
+}
+
+/** 点击预览时先显示已有缩略图，原图/预览图到了再替换；没有 loading 文案 */
+function showThumbnailPreview(attachment: AttachmentInfo): boolean {
+  if (attachment.kind !== 'image' || !attachment.thumbnailUrl) return false
+  const image = makePreviewImage(attachment.thumbnailUrl, attachment.name)
+  image.addEventListener(
+    'error',
+    () => {
+      if (image.isConnected) attachmentPreviewPlaceholder(t('quick.attachPreviewFailed'))
+    },
+    { once: true },
+  )
+  attachmentPanelBody.replaceChildren(image)
+  return true
+}
+
+/** 预加载完整预览图，加载成功后一次性替换缩略图，避免闪成空白 */
+function replaceWithPreviewImage(url: string, name: string, token: number): void {
+  const image = document.createElement('img')
+  image.className = 'attachment-preview-image'
+  image.alt = name
+  image.addEventListener(
+    'load',
+    () => {
+      if (token !== attachmentPanelToken || !attachmentPanelOpen) return
+      attachmentPanelBody.replaceChildren(image)
+    },
+    { once: true },
+  )
+  image.addEventListener(
+    'error',
+    () => {
+      // 预览图失败时保留当前缩略图，不再显示额外错误
+      if (token !== attachmentPanelToken || !attachmentPanelOpen) return
+      if (attachmentPanelBody.querySelector('.attachment-preview-image')) return
+      attachmentPreviewPlaceholder(t('quick.attachPreviewFailed'))
+    },
+    { once: true },
+  )
+  image.src = url
+}
+
+function renderAttachmentPreview(preview: AttachmentPreview): void {
+  if (preview.kind === 'text') {
+    const pre = document.createElement('pre')
+    pre.className = 'attachment-preview-text'
+    pre.textContent = preview.text || ''
+    attachmentPanelBody.replaceChildren(pre)
+    return
+  }
+  if (preview.kind === 'image' && preview.url) {
+    const image = makePreviewImage(preview.url, preview.name)
+    image.addEventListener('error', () =>
+      attachmentPreviewPlaceholder(t('quick.attachPreviewFailed')),
+    )
+    attachmentPanelBody.replaceChildren(image)
+    return
+  }
+  if (preview.kind === 'pdf' && preview.url) {
+    const frame = document.createElement('iframe')
+    frame.className = 'attachment-preview-pdf'
+    frame.src = preview.url
+    frame.title = preview.name
+    attachmentPanelBody.replaceChildren(frame)
+    return
+  }
+  attachmentPreviewPlaceholder(preview.message || t('quick.attachPreviewFailed'))
+}
+
+async function openAttachmentPreview(attachment: AttachmentInfo): Promise<void> {
+  if (!attachment.previewable) return
+
+  if (attachmentPanelOpen && activeAttachmentId === attachment.id) {
+    closeAttachmentPanel()
+    return
+  }
+
+  const hadSearch = searchPanelOpen
+  if (hadSearch) closeSearchPanel(true)
+  activeAttachmentId = attachment.id
+  attachmentPanelTitle.textContent = attachment.name
+  attachmentPanelTitle.title = attachment.name
+
+  if (!attachmentPanelOpen) {
+    app.style.width = `${Math.max(0, window.innerWidth - (hadSearch ? SEARCH_PANEL_WIDTH : 0))}px`
+    attachmentPanelOpen = true
+    attachmentPanel.hidden = false
+    shell.classList.add('search-open')
+  } else {
+    attachmentPanel.hidden = false
+    shell.classList.add('search-open')
+  }
+
+  attachmentPanelBody.replaceChildren()
+  const hasThumb = showThumbnailPreview(attachment)
+  if (!hasThumb && attachment.kind !== 'image') {
+    attachmentPreviewPlaceholder(t('quick.attachPreviewLoading'))
+  }
+  window.ds?.setAttachmentPanel(true)
+
+  const token = ++attachmentPanelToken
+  const preview = await window.ds?.requestAttachmentPreview(attachment.id)
+  if (token !== attachmentPanelToken || !attachmentPanelOpen) return
+
+  if (attachment.kind === 'image') {
+    if (preview?.kind === 'image' && preview.url) {
+      replaceWithPreviewImage(preview.url, preview.name, token)
+    } else if (!hasThumb) {
+      attachmentPreviewPlaceholder(
+        preview?.kind === 'error' && preview.message
+          ? preview.message
+          : t('quick.attachPreviewFailed'),
+      )
+    }
+    // 有缩略图但预览失败：保留缩略图，什么都不用做
+    return
+  }
+
+  if (!preview) {
+    attachmentPreviewPlaceholder(t('quick.attachPreviewFailed'))
+    return
+  }
+  renderAttachmentPreview(preview)
+}
+
+function closeAttachmentPanel(keepWindow = false): void {
+  if (!attachmentPanelOpen && attachmentPanel.hidden) return
+  attachmentPanelToken += 1
+  if (!keepWindow) {
+    if (attachmentPanelOpen) {
+      app.style.width = `${Math.max(0, window.innerWidth - SEARCH_PANEL_WIDTH)}px`
+    }
+    shell.classList.remove('search-open')
+    window.ds?.setAttachmentPanel(false)
+  }
+  attachmentPanelOpen = false
+  activeAttachmentId = null
+  attachmentPanel.hidden = true
+  attachmentPanelBody.replaceChildren()
+}
+
+attachmentPanelClose.addEventListener('click', () => closeAttachmentPanel())
+attachButton.addEventListener('click', () => void pickAttachments())
+
+// 从 Finder 复制的单个文件：粘贴时直接导入；格式不支持则静默忽略
+document.addEventListener('paste', (event) => {
+  const files = event.clipboardData?.files
+  if (!files || files.length !== 1) return
+  event.preventDefault()
+  const file = files[0]
+  let path = ''
+  try {
+    path = window.ds?.getPathForFile(file) || ''
+  } catch {
+    path = ''
+  }
+  if (!path) return
+  void (async () => {
+    if (attachments.length >= 20) {
+      showAttachmentNotice(t('quick.attachLimit'))
+      return
+    }
+    const result = await window.ds?.importAttachment(path)
+    if (!result) return
+    appendAcceptedAttachments(result, false)
+  })()
+})
 
 // 搜索结果用系统浏览器打开，不让面板自己导航
 searchPanelList.addEventListener('click', (event) => {
@@ -1361,6 +1992,25 @@ searchPanelList.addEventListener('click', (event) => {
   if (/^https?:\/\//i.test(href)) window.ds?.openExternal(href)
 })
 
+function decorateCitations(
+  body: HTMLElement,
+  sources: SearchInfo['sources'] | undefined,
+): void {
+  if (!sources?.length) return
+  const urls = new Map<number, string>()
+  sources.forEach((source, index) => {
+    if (source.url) urls.set(source.citeIndex || index + 1, source.url)
+  })
+  for (const cite of Array.from(body.querySelectorAll<HTMLElement>('.md-cite:not(.md-cite-brand)'))) {
+    const index = Number((cite.textContent || '').trim())
+    const url = urls.get(index) || sources[index - 1]?.url
+    if (url) {
+      cite.dataset.citeUrl = url
+      cite.classList.add('md-cite-clickable')
+    }
+  }
+}
+
 function buildMessageGroup(
   kind: 'user' | 'ai',
   text: string,
@@ -1369,6 +2019,7 @@ function buildMessageGroup(
   messageKey?: string,
   search?: SearchInfo,
   thinking?: ThinkingInfo,
+  attachments?: AttachmentInfo[],
 ): { group: HTMLElement; body: HTMLElement } {
   const group = document.createElement('div')
   // 用户提问 / AI 回答各自是一个独立的组，上下边距不同
@@ -1386,6 +2037,24 @@ function buildMessageGroup(
     }
   } else {
     body.textContent = text
+    if (attachments?.length) {
+      const user = group.querySelector('.msg-user') as HTMLElement | null
+      const row = buildSentAttachments(attachments)
+      if (user && row) {
+        user.insertBefore(row, body)
+        if (!text.trim()) user.classList.add('no-text')
+      }
+    }
+  }
+
+  if (kind === 'ai') {
+    const citationSources =
+      search?.sources ||
+      thinking?.aggregateSearch?.info?.sources ||
+      thinking?.segments
+        .filter((segment): segment is ThinkingSearchSegment => segment.kind === 'search')
+        .flatMap((segment) => segment.info?.sources ?? [])
+    decorateCitations(body, citationSources)
   }
 
   const actions = group.querySelector('.msg-actions') as HTMLElement
@@ -1423,6 +2092,7 @@ function appendMessage(
   messageKey?: string,
   search?: SearchInfo,
   thinking?: ThinkingInfo,
+  attachments?: AttachmentInfo[],
 ): HTMLElement {
   const { group, body } = buildMessageGroup(
     kind,
@@ -1432,6 +2102,7 @@ function appendMessage(
     messageKey,
     search,
     thinking,
+    attachments,
   )
   messagesInner.appendChild(group)
   updateScrollButton()
@@ -1478,6 +2149,7 @@ function prependMessages(history: HistoryMessage[]): void {
       undefined,
       message.search,
       message.thinking,
+      message.attachments,
     )
     fragment.appendChild(group)
   }
@@ -1501,6 +2173,7 @@ function prependOneHistoryMessage(message: HistoryMessage): void {
     message.key,
     message.search,
     message.thinking,
+    message.attachments,
   )
   messagesInner.insertBefore(group, messagesInner.firstChild)
 }
@@ -1534,6 +2207,7 @@ function renderApiHistoryInitial(
       message.key,
       message.search,
       message.thinking,
+      message.attachments,
     )
   }
 
@@ -1723,6 +2397,7 @@ function applyMode(next: QuickMode): void {
     busy = false
     historyLoading = false
     closeSearchPanel()
+    clearAttachments()
     clearMessages()
     topbar.classList.remove('show')
     app.classList.remove('content-enter')
@@ -1754,8 +2429,21 @@ function resetToEmpty(): void {
 
 function submit(): void {
   const text = input.value.trim()
-  // stopping：已经点了停止，等主进程确认前不要发下一条
-  if (!text || busy || stopping || historyLoading) return
+  const selectedAttachments = attachments.slice()
+  // 有文字或附件才能发；stopping 时等主进程确认前不要发下一条
+  if ((!text && !selectedAttachments.length) || busy || stopping || historyLoading) return
+  /*
+   * 和网页保持一致：只要还有异常附件，就不能发送。
+   * 用户必须移除异常文件，或者点击「重新上传」成功后才能继续。
+   */
+  if (selectedAttachments.some((attachment) => attachment.status === 'error')) {
+    showAttachmentSendError()
+    return
+  }
+  if (selectedAttachments.some((a) => a.status === 'uploading' || a.status === 'parsing')) {
+    showAttachmentNotice(t('quick.attachProcessing'))
+    return
+  }
 
   // 发了新消息，上一条被截断的回答就不能再继续了
   hideContinueButton()
@@ -1774,6 +2462,7 @@ function submit(): void {
   const smartSearch = isPressed(smartSearchButton)
   const payload: QuickSubmitPayload = {
     text,
+    attachmentIds: selectedAttachments.map((attachment) => attachment.id),
     deepThink: isPressed(deepThinkButton),
     smartSearch,
     // 空态发出的消息 = 新对话的第一条，主进程会先开新会话
@@ -1792,7 +2481,24 @@ function submit(): void {
 
   // 先把反馈给到用户：切形态 + 画出自己那条气泡，然后再等回答
   switchToContent()
-  const bubble = appendMessage('user', text)
+  const bubble = appendMessage(
+    'user',
+    text,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    selectedAttachments.length ? selectedAttachments : undefined,
+  )
+  /*
+   * 点发送后托盘立刻消失；先暂存这一批附件，只有主进程在真正点下发送前
+   * 报错（例如网页仍然拒绝发送）时才恢复，避免用户看到附件已经发走。
+   */
+  pendingSubmission = selectedAttachments
+  attachments = []
+  attachmentStatusUntil = 0
+  renderAttachmentTray()
   addThinking()
 
   // 新消息顶到「顶栏下方 10px」，每次发消息都能从最上面开始看
@@ -1998,6 +2704,17 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       historyLoading = false
       busy = false
       stopping = false
+      /*
+       * 主进程在真正点发送前失败：恢复刚才暂存的附件，
+       * 用户可以直接重试/移除，而不是看着托盘已经空了。
+       */
+      if (pendingSubmission) {
+        attachments = pendingSubmission
+        pendingSubmission = null
+        attachmentStatusUntil = Date.now() + 30_000
+        renderAttachmentTray()
+        scheduleAttachmentStatusPoll()
+      }
       appendMessage('ai', `${t('quick.error')}：${event.message}`)
       syncSendState()
       updateScrollButton()
@@ -2032,6 +2749,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'history-start': {
       applyHistoryPanel(false)
       closeSearchPanel()
+      clearAttachments()
       clearMessages()
       addThinking()
       historyLoading = true
@@ -2076,6 +2794,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
             message.key,
             message.search,
             message.thinking,
+            message.attachments,
           )
         }
         historyHasOlder = event.hasOlder
@@ -2140,6 +2859,9 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       busy = true
       stopping = false
       hideContinueButton()
+      // 网页已经接受消息，之前暂存的附件不需要再恢复
+      pendingSubmission = null
+      if (attachments.length) clearAttachments()
       syncSendState()
       break
     }
@@ -2220,6 +2942,25 @@ app.addEventListener(
 // Markdown 里的链接：一律用系统浏览器打开，不让面板自己导航
 messagesInner.addEventListener('click', (event) => {
   const target = event.target as HTMLElement | null
+
+  // 历史接口路径的引用角标只是 <span class="md-cite">N</span>，没有 href；
+  // 用当前回答的搜索结果把 N 映射回来源 URL。
+  const numericCite = target?.closest('.md-cite:not(.md-cite-brand)') as HTMLElement | null
+  if (numericCite && !numericCite.closest('a')) {
+    const group = numericCite.closest('.msg-group') as HTMLElement | null
+    const info = group ? groupSearchInfo.get(group) : undefined
+    const index = Number((numericCite.textContent || '').trim())
+    const source =
+      info?.sources.find((item) => item.citeIndex === index) ||
+      (Number.isInteger(index) && index > 0 ? info?.sources[index - 1] : undefined)
+    const url = numericCite.dataset.citeUrl || source?.url
+    if (url) {
+      event.preventDefault()
+      window.ds?.openExternal(url)
+      return
+    }
+  }
+
   const link = target?.closest('a')
   if (!link) return
   event.preventDefault()
@@ -2240,6 +2981,7 @@ messagesInner.addEventListener('click', (event) => {
 // 滚动时更新「滚动到底部」按钮；滚到历史顶部时按需加载更早消息
 messages.addEventListener('scroll', () => {
   updateScrollButton()
+  collapseTailAtBottom()
   if (
     historyLazyArmed &&
     historyHasOlder &&
@@ -2282,8 +3024,9 @@ scrollObserver.observe(messagesInner)
 scrollBottomButton.addEventListener('click', () => {
   // 点下去立刻收起，不等滚到底部
   suppressScrollButtonDuringAnimation()
-  // 只滚到内容底部，不滚进 messagesTail 补出来的空白
-  messages.scrollTo({ top: Math.max(0, contentBottom() - messages.clientHeight), behavior: 'smooth' })
+  // 先收掉补位空间，再滚到真正的底部；否则会滚进 last message 下面的空白
+  messagesTail.style.height = '0px'
+  messages.scrollTo({ top: Math.max(0, messages.scrollHeight - messages.clientHeight), behavior: 'smooth' })
   focusInput()
 })
 sendButton.addEventListener('click', () => {
@@ -2368,7 +3111,7 @@ app.addEventListener('pointerdown', (event) => {
   // 历史弹框开着时，点哪都只是「关弹框」，不要顺手把窗口拖走
   if (historyOpen) return
   const target = event.target as HTMLElement | null
-  if (target?.closest('button, textarea, input, select, a, .messages, .history-panel')) return
+  if (target?.closest('button, textarea, input, select, a, .messages, .history-panel, .attachment-tray, .attachment-panel')) return
   // 个别情况下 screenX/Y 会是 NaN，不能拿它当拖动起点
   if (!Number.isFinite(event.screenX) || !Number.isFinite(event.screenY)) return
 
@@ -2479,6 +3222,11 @@ app.addEventListener('click', (event) => {
 
 void loadMessages()
 autosize()
+// 附件托盘高度变化时，渐变层跟着重新贴住托盘顶部
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => placeMessagesFade()).observe(attachmentTray)
+}
+
 syncSendState()
 syncAppWidth()
 input.focus()

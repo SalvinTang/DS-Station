@@ -209,7 +209,7 @@ button:focus-visible {
 .row:focus,
 .row:focus-visible {
   outline: none;
-  background: var(--hover);
+  background: transparent;
 }
 
 .row svg {
@@ -254,4 +254,10 @@ button:focus-visible {
   color: var(--version);
   font-size: 10px;
   text-align: center;
+}
+
+
+/* 菜单刚出现时先不响应行悬浮，等鼠标真正移动后再启用 */
+body:not(.hover-ready) .row:hover {
+  background: transparent;
 }

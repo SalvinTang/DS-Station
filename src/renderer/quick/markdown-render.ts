@@ -16,9 +16,34 @@ import MarkdownIt from 'markdown-it'
 import texmath from 'markdown-it-texmath'
 import taskLists from 'markdown-it-task-lists'
 import footnote from 'markdown-it-footnote'
-import hljs from 'highlight.js'
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+import cpp from 'highlight.js/lib/languages/cpp'
+import css from 'highlight.js/lib/languages/css'
+import go from 'highlight.js/lib/languages/go'
+import java from 'highlight.js/lib/languages/java'
+import javascript from 'highlight.js/lib/languages/javascript'
+import json from 'highlight.js/lib/languages/json'
+import python from 'highlight.js/lib/languages/python'
+import typescript from 'highlight.js/lib/languages/typescript'
+import xml from 'highlight.js/lib/languages/xml'
 import katex from 'katex'
 import { CODE_COPY_ICON, attachCodeCopy, getCopyCodeLabel } from './markdown'
+
+/**
+ * 只注册常用语言。全量 highlight.js 会把 190 多种语言都带进快捷窗口，
+ * 而这里只按 fence 的语言名显式高亮；未注册的语言自然退化成纯文本。
+ */
+hljs.registerLanguage('bash', bash)
+hljs.registerLanguage('cpp', cpp)
+hljs.registerLanguage('css', css)
+hljs.registerLanguage('go', go)
+hljs.registerLanguage('java', java)
+hljs.registerLanguage('javascript', javascript)
+hljs.registerLanguage('json', json)
+hljs.registerLanguage('python', python)
+hljs.registerLanguage('typescript', typescript)
+hljs.registerLanguage('xml', xml)
 
 /** 两条公式路径必须共用同一套输出选项，漏掉任何一条都会退化成无 CSS 的 HTML */
 const KATEX_OPTIONS = {
@@ -97,8 +122,8 @@ md.renderer.rules.image = (tokens: any, idx: number): string => {
   return `<span class="md-image-alt">${md.utils.escapeHtml(alt)}</span>`
 }
 
-/** Markdown HTML 缓存：8MB 内容预算、单条 512KB、LRU、仅内存 */
-const MAX_CACHE_CHARS = 8 * 1024 * 1024
+/** Markdown HTML 缓存：2M 字符预算、单条 512K 字符、LRU、仅内存 */
+const MAX_CACHE_CHARS = 2 * 1024 * 1024
 const MAX_ENTRY_CHARS = 512 * 1024
 const htmlCache = new Map<string, string>()
 let cacheChars = 0

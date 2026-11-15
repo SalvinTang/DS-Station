@@ -136,6 +136,142 @@ export class DeepSeekPage {
     `)
   }
 
+  /** 网页隐藏文件输入框的 accept 列表，作为唯一格式白名单 */
+  async readFileAccept(): Promise<string | null> {
+    return this.run<string | null>(`
+      const input = document.querySelector('input[type=file]');
+      return input && input.accept ? input.accept : null;
+    `)
+  }
+
+  /**
+   * 把本机文件交给网页的 file input。
+   *
+   * 网页自己会上传到 DeepSeek，我们只负责构造 File 并触发 change。
+   * 文件通过临时本机 URL 读取，避免 100MB 文件走 base64 字符串。
+   */
+  async attachFiles(files: Array<{ url: string; name: string; type: string }>): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        return (async () => {
+          const input = document.querySelector('input[type=file]');
+          if (!input) return false;
+          try {
+            const files = await Promise.all(${JSON.stringify(files)}.map(async (item) => {
+              const response = await fetch(item.url);
+              if (!response.ok) throw new Error('fetch ' + response.status);
+              const blob = await response.blob();
+              return new File([blob], item.name, { type: item.type || 'application/octet-stream' });
+            }));
+            const transfer = new DataTransfer();
+            for (const file of files) transfer.items.add(file);
+            Object.defineProperty(input, 'files', {
+              value: transfer.files,
+              configurable: true,
+            });
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          } catch (error) {
+            console.error('[DeepSeek] 附件注入失败:', error);
+            return false;
+          }
+        })();
+      `)) === true
+    )
+  }
+
+  /** 读取输入区附件卡片的实时状态；顺序与附件选择顺序一致 */
+  async readComposerAttachmentStatuses(): Promise<
+    Array<{ status: 'uploading' | 'ready' | 'error'; error?: string; retryable?: boolean }>
+  > {
+    return (
+      (await this.run<
+        Array<{ status: 'uploading' | 'ready' | 'error'; error?: string; retryable?: boolean }>
+      >(`
+        return Array.from(document.querySelectorAll('.ds-animated-size-item')).map((card) => {
+          const text = (card.innerText || '').trim();
+          const border = getComputedStyle(card).borderColor || '';
+          const match = border.match(/rgb\\((\\d+),\\s*(\\d+),\\s*(\\d+)\\)/);
+          const reddish = !!match &&
+            Number(match[1]) > 180 && Number(match[2]) < 130 && Number(match[3]) < 130;
+          /*
+           * 上传失败时 DeepSeek 会把文档图标换成 16×16 的圆形箭头（重试）。
+           * 文件图标是 28×28，移除按钮是 14×14，可以用尺寸区分。
+           * 文字判断同时保留中文/英文，避免只依赖哈希类名。
+           */
+          const retryIcon = !!card.querySelector('svg[width="16"]');
+          const uploadFailed = retryIcon || /上传失败|Upload failed|Failed to upload/i.test(text);
+          const noText = /无法提取|未提取到文字|No text/i.test(text);
+          const parseFailed = /解析失败|Parsing failed|File exceeds|文件超过|格式不支持|Not supported/i.test(text);
+          const error = uploadFailed || noText || parseFailed || reddish;
+          const uploading = /上传中|正在上传|上传处理中|解析中|等待中|Pending|Uploading|Parsing/i.test(text);
+          return {
+            status: error ? 'error' : uploading ? 'uploading' : 'ready',
+            error: error ? (text || '上传失败') : undefined,
+            retryable: uploadFailed,
+          };
+        });
+      `)) ?? []
+    )
+  }
+
+  /** 点击失败卡片左侧的圆形箭头，让 DeepSeek 自己重新上传 */
+  async retryComposerAttachment(index: number): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const cards = Array.from(document.querySelectorAll('.ds-animated-size-item'));
+        const card = cards[${String(Math.max(0, Math.floor(index)))}];
+        if (!card) return false;
+        const retrySvg = card.querySelector('svg[width="16"]');
+        if (!retrySvg) return false;
+        const button = retrySvg.closest('div');
+        if (!button) return false;
+        button.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 移除输入区第 index 张附件卡片；按 18px 的移除圆钮定位 */
+  async removeComposerAttachment(index: number): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const cards = Array.from(document.querySelectorAll('.ds-animated-size-item'));
+        const card = cards[${String(Math.max(0, Math.floor(index)))}];
+        if (!card) return false;
+        const candidates = Array.from(card.querySelectorAll('div')).filter((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width >= 16 && r.width <= 20 && r.height >= 16 && r.height <= 20;
+        });
+        const button = candidates[candidates.length - 1];
+        if (!button) return false;
+        button.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 等待网页完成附件上传并让发送按钮可用 */
+  async waitForAttachments(count: number, timeoutMs = 120000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const state = await this.run<{ cards: number; sendEnabled: boolean }>(`
+        const cards = document.querySelectorAll('.ds-animated-size-item').length;
+        const button = Array.from(document.querySelectorAll('[role=button]')).find((el) => {
+          const cls = String(el.className || '');
+          return cls.includes('ds-button--primary') && cls.includes('ds-button--circle');
+        });
+        return {
+          cards,
+          sendEnabled: !!button && !String(button.className || '').includes('ds-button--disa'),
+        };
+      `)
+      if (state && state.cards >= count && state.sendEnabled) return true
+      await delay(300)
+    }
+    return false
+  }
+
   /** 选择器自检：启动时跑，哪一项挂了立刻能看出来 */
   async selfCheck(): Promise<Record<SelectorKey, boolean> | null> {
     return this.run<Record<SelectorKey, boolean>>(`
@@ -189,7 +325,13 @@ export class DeepSeekPage {
     return (
       (await this.run<boolean>(`
         const btn = dsFind('sendButton');
-        if (btn && !String(btn.className || '').includes(DS_STATE.buttonDisabled)) {
+        if (btn) {
+          /*
+           * 按钮存在但处于 disabled（例如附件上传失败、网页提示删除异常文件）时，
+           * 不能再退化成派发 Enter 并返回 true；否则主进程会误以为已经发送，
+           * 一直等回答直到超时。
+           */
+          if (String(btn.className || '').includes(DS_STATE.buttonDisabled)) return false;
           btn.click();
           return true;
         }
@@ -1329,7 +1471,54 @@ export class DeepSeekPage {
                     .map((fragment) => fragment.content)
                     .join('')
                     .trim();
-                  if (request) out.push({ role: 'user', text: request, key: String(message.message_id) });
+                  const fileFragments = fragments.filter((fragment) => fragment.type === 'FILE');
+                  const attachments = [];
+                  const dsImageExts = new Set(['png','jpg','jpeg','heic','heif','svg','svgz','bmp','gif','webp','ico','xbm','dib','pjp','tif','pjpeg','avif','apng','tiff','jfif','jpe','jp2','jpc','jpf','jpx','mpeg','mpg','pbm','pcx','pfm','pgm','ppm','psd','pxr','qoi','ras','rgb','rgba','sgi','tga','vda','vst','wmf','xpm']);
+                  const dsOfficeExts = new Set(['docx','xlsx','pptx','doc','xls','ppt']);
+                  const dsEbookExts = new Set(['epub','mobi','azw3','h5','hdf']);
+                  const dsExt = (name) => {
+                    const base = name.split(/[\\/]/).pop() || '';
+                    const index = base.lastIndexOf('.');
+                    return index <= 0 || index === base.length - 1 ? '' : base.slice(index + 1).toLowerCase();
+                  };
+                  const dsKind = (ext) => {
+                    if (dsImageExts.has(ext)) return 'image';
+                    if (ext === 'pdf') return 'pdf';
+                    if (dsOfficeExts.has(ext) || dsEbookExts.has(ext)) return 'file';
+                    return 'text';
+                  };
+                  for (const fragment of fileFragments) {
+                    const files = Array.isArray(fragment.files) ? fragment.files : [];
+                    for (const file of files) {
+                      const name = typeof file.file_name === 'string' ? file.file_name : '';
+                      if (!name) continue;
+                      const ext = dsExt(name);
+                      const kind = dsKind(ext);
+                      const signedPath = typeof file.signed_path === 'string' ? file.signed_path : undefined;
+                      attachments.push({
+                        id: String(file.id || ('file-' + name + '-' + attachments.length)),
+                        name,
+                        size: Number(file.file_size) || 0,
+                        ext,
+                        kind,
+                        previewable: kind !== 'file',
+                        status: file.status === 'SUCCESS' ? 'ready' : 'error',
+                        error: file.error_code ? String(file.error_code) : undefined,
+                        thumbnailUrl: kind === 'image' && signedPath
+                          ? (signedPath.startsWith('http') ? signedPath : 'https://files.deepseeksvc.com/api' + (signedPath.startsWith('/') ? signedPath : '/' + signedPath) + (signedPath.includes('?') ? '&' : '?') + 'ty=t')
+                          : undefined,
+                        signedPath,
+                      });
+                    }
+                  }
+                  if (request || attachments.length) {
+                    out.push({
+                      role: 'user',
+                      text: request,
+                      key: String(message.message_id),
+                      attachments: attachments.length ? attachments : undefined,
+                    });
+                  }
                   continue;
                 }
                 const response = fragments

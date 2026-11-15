@@ -87,8 +87,9 @@ export class QuickWindow {
   private historyRestoreHeight = QUICK_WINDOW_MIN_HEIGHT
   /** 关闭弹框后延迟还原窗口的定时器 */
   private historyCloseTimer: NodeJS.Timeout | null = null
-  /** 智能搜索结果栏是否展开（只影响有内容态宽度） */
+  /** 右侧栏是否展开：搜索结果和附件预览共用同一块 260px 宽度 */
   private searchPanelOpen = false
+  private attachmentPanelOpen = false
 
   /** 有内容态的尺寸，跨隐藏/重启保留 */
   private contentSize = {
@@ -148,6 +149,8 @@ export class QuickWindow {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // 附件预览栏用 Chromium 内置 PDF viewer 显示 PDF
+        plugins: true,
       },
     })
 
@@ -460,20 +463,37 @@ export class QuickWindow {
     return this.mode === 'content'
   }
 
+  private get sidePanelOpen(): boolean {
+    return this.searchPanelOpen || this.attachmentPanelOpen
+  }
+
   /** 搜索结果栏展开/收起：窗口加宽/收窄，内容宽度保持不变 */
   setSearchPanel(open: boolean): void {
     if (this.mode !== 'content') return
+    const wasOpen = this.sidePanelOpen
+    this.searchPanelOpen = open
+    if (open) this.attachmentPanelOpen = false
+    this.applySidePanel(wasOpen)
+  }
 
+  /** 附件预览栏展开/收起；和搜索结果栏互斥，共用 260px 宽度 */
+  setAttachmentPanel(open: boolean): void {
+    if (this.mode !== 'content') return
+    const wasOpen = this.sidePanelOpen
+    this.attachmentPanelOpen = open
+    if (open) this.searchPanelOpen = false
+    this.applySidePanel(wasOpen)
+  }
+
+  private applySidePanel(wasOpen: boolean): void {
     const bounds = this.window.getBounds()
-    const currentExtra = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+    const open = this.sidePanelOpen
+    const currentExtra = wasOpen ? SEARCH_PANEL_WIDTH : 0
     const currentContentWidth = Math.max(
       QUICK_WINDOW_CONTENT_MIN_WIDTH,
       bounds.width - currentExtra,
     )
     this.contentSize = { width: currentContentWidth, height: bounds.height }
-
-    if (this.searchPanelOpen === open) return
-    this.searchPanelOpen = open
 
     if (!this.visible) return
 
@@ -490,7 +510,7 @@ export class QuickWindow {
     }
     x = Math.max(area.x, Math.round(x))
 
-    // 先改最小宽度再改 bounds：否则关闭搜索栏时 420 会被旧的 680 最小值夹回去
+    // 先改最小宽度再改 bounds：否则关闭右侧栏时 420 会被旧的 680 最小值夹回去
     this.window.setMinimumSize(
       QUICK_WINDOW_CONTENT_MIN_WIDTH + (open ? SEARCH_PANEL_WIDTH : 0),
       QUICK_WINDOW_CONTENT_MIN_HEIGHT,
@@ -521,7 +541,10 @@ export class QuickWindow {
     }
 
     if (mode === 'content') {
-      if (previous === 'empty') this.searchPanelOpen = false
+      if (previous === 'empty') {
+        this.searchPanelOpen = false
+        this.attachmentPanelOpen = false
+      }
       const target = this.contentBoundsFromCurrent()
       this.window.setResizable(true)
 
@@ -552,6 +575,7 @@ export class QuickWindow {
     // ── 收回空态 ─────────────────────────────────────────────
     this.cancelAnimation()
     this.searchPanelOpen = false
+    this.attachmentPanelOpen = false
     this.window.setMinimumSize(0, 0)
     this.window.setResizable(false)
 
@@ -617,7 +641,7 @@ export class QuickWindow {
     const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
     const area = display.workArea
 
-    const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+    const panelWidth = this.sidePanelOpen ? SEARCH_PANEL_WIDTH : 0
     const width =
       this.mode === 'content' ? this.contentWidthFor(area) + panelWidth : QUICK_WINDOW_WIDTH
     const height = this.mode === 'content' ? this.contentHeightFor(area) : this.currentHeight
@@ -876,7 +900,7 @@ export class QuickWindow {
     if (this.mode === 'content') {
       // 同步内存里的尺寸：用户缩放后马上收起时，防抖可能还没跑完
       // 搜索栏的宽度不属于内容宽度，保存时要扣掉
-      const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+      const panelWidth = this.sidePanelOpen ? SEARCH_PANEL_WIDTH : 0
       const contentWidth = Math.max(QUICK_WINDOW_CONTENT_MIN_WIDTH, bounds.width - panelWidth)
       this.contentSize = { width: contentWidth, height: bounds.height }
       patch.contentWidth = contentWidth
@@ -894,7 +918,7 @@ export class QuickWindow {
       if (this.mode !== 'content' || !this.visible) return
 
       const bounds = this.window.getBounds()
-      const panelWidth = this.searchPanelOpen ? SEARCH_PANEL_WIDTH : 0
+      const panelWidth = this.sidePanelOpen ? SEARCH_PANEL_WIDTH : 0
       const contentWidth = Math.max(QUICK_WINDOW_CONTENT_MIN_WIDTH, bounds.width - panelWidth)
       this.contentSize = { width: contentWidth, height: bounds.height }
       save({

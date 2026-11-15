@@ -8,6 +8,8 @@ import { isQuitting } from '../app-state'
  * 两个引导页共用一个 BrowserWindow，顶部是 macOS 标准窗口标题栏：
  * hiddenInset 保留系统红绿灯，背景和页面内容一致，不再自绘深色条。
  * 页面里只负责切换「引导页 1 / 引导页 2」。
+ *
+ * 实例由 index.ts 按需创建：启动阶段不预建，第一次需要显示引导时才加载。
  */
 
 export const GUIDE_STEP = { intro: 1, connect: 2 } as const

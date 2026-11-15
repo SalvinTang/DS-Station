@@ -6,9 +6,6 @@ export const DEEPSEEK_URL = `${DEEPSEEK_ORIGIN}/`
 /** 持久化分区：主窗口与快捷窗口共享同一份登录态（产品说明书 §8） */
 export const SESSION_PARTITION = 'persist:deepseek'
 
-/** 自绘标题栏高度 */
-export const TITLEBAR_HEIGHT = 44
-
 /**
  * 允许在应用内部打开的第三方域。
  * 目前只有第三方登录会用到（DeepSeek 登录页提供 Apple 账号登录）。

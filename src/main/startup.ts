@@ -34,7 +34,8 @@ export class StartupFlow {
   constructor(
     private readonly win: MainWindow,
     private readonly quick: QuickWindow,
-    private readonly guide: GuideWindow,
+    private readonly existingGuide: () => GuideWindow | null,
+    private readonly ensureGuide: () => GuideWindow,
   ) {}
 
   /** 启动门禁是否已经完成（这之前不响应 Dock 的 activate，避免主窗口提前冒出来） */
@@ -91,7 +92,7 @@ export class StartupFlow {
     if (state === 'logged-in') {
       this.loggedIn = true
       save({ login: { knownLoggedIn: true }, guide: { introSeen: true } })
-      this.guide.hide()
+      this.existingGuide()?.hide()
       this.quick.show()
       console.log('[启动] 已登录 → 只显示快捷窗口')
       return
@@ -116,7 +117,7 @@ export class StartupFlow {
     save({ login: { knownLoggedIn: true }, guide: { introSeen: true } })
 
     // 先亮面板再收其他窗口：反过来会让 App 在中间瞬间失去 key window
-    this.guide.hide()
+    this.existingGuide()?.hide()
     this.quick.show()
     this.win.window.hide()
     console.log('[启动] 登录完成 → 主窗口收起，快捷窗口出现')
@@ -170,7 +171,7 @@ export class StartupFlow {
   }
 
   private showGuide(step: GuideStep): void {
-    this.guide.show(step)
+    this.ensureGuide().show(step)
     this.quick.hide()
     this.win.window.hide()
   }

@@ -53,5 +53,15 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') window.ds?.hideTrayMenu()
 })
 
-window.ds?.onTrayShown(() => void loadState())
+window.ds?.onTrayShown(() => {
+  // 菜单刚出现时，鼠标可能正好压在“打开主窗口”上；首次移动鼠标前不要
+  // 让首行出现悬浮底色，避免看起来它一直处于选中状态。
+  document.body.classList.remove('hover-ready')
+  void loadState()
+})
+
+document.addEventListener('mousemove', () => {
+  document.body.classList.add('hover-ready')
+}, { once: true })
+
 void loadState()
