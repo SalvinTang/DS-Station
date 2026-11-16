@@ -60,6 +60,12 @@ const COPY_ICON = `
     <path fill="currentColor" d="M6.14929 4.02032C7.11197 4.02032 7.87983 4.02016 8.49597 4.07598C9.12128 4.13269 9.65792 4.25188 10.1415 4.53106C10.7202 4.8653 11.2008 5.3459 11.535 5.92462C11.8142 6.40818 11.9334 6.94481 11.9901 7.57012C12.0459 8.18625 12.0458 8.95419 12.0458 9.9168C12.0458 10.8795 12.0459 11.6473 11.9901 12.2635C11.9334 12.8888 11.8142 13.4254 11.535 13.909C11.2008 14.4877 10.7202 14.9683 10.1415 15.3025C9.65792 15.5817 9.12128 15.7009 8.49597 15.7576C7.87984 15.8134 7.11196 15.8133 6.14929 15.8133C5.18667 15.8133 4.41874 15.8134 3.80261 15.7576C3.1773 15.7009 2.64067 15.5817 2.1571 15.3025C1.5784 14.9683 1.09778 14.4877 0.76355 13.909C0.484366 13.4254 0.365184 12.8888 0.308472 12.2635C0.252649 11.6473 0.252808 10.8795 0.252808 9.9168C0.252808 8.95418 0.252664 8.18625 0.308472 7.57012C0.365184 6.94481 0.484366 6.40818 0.76355 5.92462C1.09777 5.34589 1.57839 4.86529 2.1571 4.53106C2.64067 4.25188 3.1773 4.13269 3.80261 4.07598C4.41874 4.02017 5.18666 4.02032 6.14929 4.02032ZM6.14929 5.37774C5.16181 5.37774 4.46634 5.37761 3.92566 5.42657C3.39434 5.47472 3.07859 5.56574 2.83582 5.70587C2.4632 5.92106 2.15354 6.2307 1.93835 6.60333C1.79823 6.8461 1.70721 7.16185 1.65906 7.69317C1.6101 8.23385 1.61023 8.92933 1.61023 9.9168C1.61023 10.9043 1.61009 11.5998 1.65906 12.1404C1.70721 12.6717 1.79823 12.9875 1.93835 13.2303C2.15356 13.6029 2.46321 13.9126 2.83582 14.1277C3.07859 14.2679 3.39434 14.3589 3.92566 14.407C4.46634 14.456 5.16182 14.4559 6.14929 14.4559C7.13682 14.4559 7.83224 14.456 8.37292 14.407C8.90425 14.3589 9.21999 14.2679 9.46277 14.1277C9.83535 13.9126 10.145 13.6029 10.3602 13.2303C10.5004 12.9875 10.5914 12.6717 10.6395 12.1404C10.6885 11.5998 10.6884 10.9043 10.6884 9.9168C10.6884 8.92934 10.6885 8.23384 10.6395 7.69317C10.5914 7.16185 10.5004 6.8461 10.3602 6.60333C10.1451 6.23071 9.83536 5.92107 9.46277 5.70587C9.21999 5.56574 8.90424 5.47472 8.37292 5.42657C7.83224 5.3776 7.13682 5.37774 6.14929 5.37774ZM9.80164 0.367975C10.7638 0.367975 11.5314 0.36788 12.1473 0.423639C12.7726 0.480307 13.3093 0.598759 13.7928 0.877741C14.3717 1.21192 14.8521 1.69355 15.1864 2.27227C15.4655 2.75574 15.5857 3.29164 15.6425 3.9168C15.6983 4.53301 15.6971 5.3016 15.6971 6.26446V7.82989C15.6971 8.29264 15.6989 8.58993 15.6649 8.84844C15.4668 10.3525 14.401 11.5738 12.9833 11.9988V10.5467C13.6973 10.1903 14.2105 9.49662 14.3192 8.67169C14.3387 8.52347 14.3407 8.3358 14.3407 7.82989V6.26446C14.3407 5.27706 14.3398 4.58149 14.2909 4.04083C14.2428 3.50968 14.1526 3.19372 14.0126 2.95098C13.7974 2.57849 13.4876 2.26869 13.1151 2.05352C12.8724 1.91347 12.5564 1.82237 12.0253 1.77423C11.4847 1.72528 10.7888 1.7254 9.80164 1.7254H7.71472C6.7562 1.72558 5.92665 2.27697 5.52332 3.07891H4.07019C4.54221 1.51132 5.9932 0.368186 7.71472 0.367975H9.80164Z" />
   </svg>`
 
+/** 设计稿「修改」图标：和网页用户消息上的铅笔一致 */
+const EDIT_ICON = `
+  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M9.94076 1.34942C10.7047 0.90231 11.6503 0.902415 12.4143 1.34942C12.7061 1.52015 12.9688 1.79118 13.3104 2.13284C13.6521 2.47448 13.9231 2.73721 14.0939 3.02894C14.5408 3.79294 14.5409 4.73856 14.0939 5.50251C13.9231 5.79415 13.652 6.05704 13.3104 6.39861L6.65932 13.0497C6.28068 13.4284 6.00695 13.7108 5.66543 13.9097C5.32391 14.1085 4.94315 14.2074 4.42705 14.3498L3.24394 14.6761C2.77527 14.8054 2.34538 14.9262 2.00131 14.9684C1.65196 15.0112 1.17964 15.0013 0.810764 14.6325C0.441921 14.2637 0.432107 13.7913 0.47486 13.442C0.517035 13.0979 0.6379 12.668 0.767181 12.1993L1.09352 11.0162C1.23588 10.5001 1.33481 10.1193 1.5336 9.77784C1.7325 9.43632 2.0149 9.1626 2.39355 8.78395L9.04466 2.13284C9.38625 1.79126 9.64911 1.52016 9.94076 1.34942ZM15.5427 14.8398H7.55223L8.96707 13.425H15.5427V14.8398ZM3.39382 9.78422C2.965 10.213 2.84244 10.3436 2.75709 10.49C2.67183 10.6366 2.61862 10.8079 2.45733 11.3925L2.13099 12.5756C2.00183 13.0439 1.92194 13.3419 1.88863 13.5536C2.10041 13.5204 2.39872 13.4416 2.86764 13.3123L4.05075 12.9859C4.63544 12.8246 4.80669 12.7715 4.95323 12.6862C5.09968 12.6008 5.23022 12.4783 5.65905 12.0494L10.721 6.98644L8.45577 4.72121L3.39382 9.78422ZM11.7 2.57079C11.3774 2.38198 10.9777 2.38198 10.6551 2.57079C10.5602 2.62647 10.4487 2.72931 10.0449 3.13311L9.45604 3.72094L11.7213 5.98617L12.3102 5.39833C12.7139 4.99457 12.8168 4.88307 12.8725 4.78818C13.0613 4.46561 13.0612 4.06585 12.8725 3.74326C12.8169 3.64827 12.7146 3.53752 12.3102 3.13311C11.9057 2.72863 11.795 2.6264 11.7 2.57079Z" fill="currentColor"/>
+  </svg>`
+
 const SEARCH_ICON = `
   <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <path d="M11.748 6.7028C11.748 3.90104 9.47653 1.62976 6.6748 1.62956C3.87291 1.62956 1.60156 3.90091 1.60156 6.7028C1.60176 9.50453 3.87304 11.776 6.6748 11.776C9.47641 11.7759 11.7479 9.50441 11.748 6.7028ZM13.0479 6.7028C13.0477 10.2224 10.1944 13.0757 6.6748 13.0759C3.15507 13.0759 0.300977 10.2225 0.300781 6.7028C0.300781 3.18294 3.15494 0.328781 6.6748 0.328781C10.1945 0.328977 13.0479 3.18307 13.0479 6.7028Z" fill="currentColor"/>
@@ -167,6 +173,12 @@ function applyMessages(): void {
   if (historyLabel) historyLabel.textContent = t('quick.history')
   if (historyEmpty) historyEmpty.textContent = t('quick.noHistory')
   if (searchPanelTitle) searchPanelTitle.textContent = t('quick.searchResults')
+  if (cancelEditButton) cancelEditButton.textContent = t('quick.editCancel')
+  if (modifyEditButton) {
+    modifyEditButton.textContent = t('quick.editModify')
+    modifyEditButton.title = t('quick.editModify')
+    modifyEditButton.setAttribute('aria-label', t('quick.editModify'))
+  }
   if (attachmentPanelClose) {
     attachmentPanelClose.title = t('quick.searchCollapse')
     attachmentPanelClose.setAttribute('aria-label', t('quick.searchCollapse'))
@@ -225,6 +237,8 @@ const deepThinkButton = document.getElementById('deepThink')
 const smartSearchButton = document.getElementById('smartSearch')
 const deepThinkLabel = document.getElementById('deepThinkLabel')
 const smartSearchLabel = document.getElementById('smartSearchLabel')
+const cancelEditButton = document.getElementById('cancelEdit') as HTMLButtonElement
+const modifyEditButton = document.getElementById('modifyEdit') as HTMLButtonElement
 const sendButton = document.getElementById('send') as HTMLButtonElement
 const scrollBottomButton = document.getElementById('scrollBottom') as HTMLButtonElement
 
@@ -251,6 +265,19 @@ let searchPanelOpen = false
 let attachments: AttachmentInfo[] = []
 /** 刚点发送、还没收到 answer-start 的附件；发送前置失败时用来恢复托盘 */
 let pendingSubmission: AttachmentInfo[] | null = null
+/** 用户消息组 → 原始文字和附件，修改消息时用来回填 */
+const userMessageData = new WeakMap<
+  HTMLElement,
+  { text: string; attachments?: AttachmentInfo[] }
+>()
+/** 当前是否在修改最新消息 */
+let editing = false
+let editStarting = false
+let editSubmitting = false
+let editGroup: HTMLElement | null = null
+let editExistingIds = new Set<string>()
+let editDraftText = ''
+let editDraftAttachments: AttachmentInfo[] = []
 /** 右侧附件预览栏 */
 let attachmentPanelOpen = false
 let activeAttachmentId: string | null = null
@@ -361,6 +388,17 @@ function autosize(): void {
 let sendIconIsStop = false
 
 function syncSendState(): void {
+  if (editing) {
+    sendButton.disabled = true
+    attachButton.disabled =
+      editSubmitting || attachPicking || attachments.length >= 20
+    attachButton.title =
+      attachments.length >= 20 ? t('quick.attachLimit') : t('quick.attach')
+    attachButton.setAttribute('aria-label', attachButton.title)
+    syncEditButtonState()
+    return
+  }
+
   if (busy !== sendIconIsStop) {
     sendIconIsStop = busy
     sendButton.innerHTML = busy ? STOP_ICON : SEND_ICON
@@ -384,6 +422,21 @@ function syncSendState(): void {
   attachButton.title =
     attachments.length >= 20 ? t('quick.attachLimit') : t('quick.attach')
   attachButton.setAttribute('aria-label', attachButton.title)
+}
+
+function syncEditButtonState(): void {
+  if (!editing) {
+    modifyEditButton.disabled = true
+    return
+  }
+  const hasText = input.value.trim().length > 0
+  const hasAttachment = attachments.length > 0
+  const blocked =
+    attachments.some(
+      (attachment) => attachment.status === 'error' || attachment.status === 'uploading',
+    ) || editSubmitting
+  modifyEditButton.disabled = !hasText && !hasAttachment ? true : blocked
+  cancelEditButton.disabled = editSubmitting
 }
 
 /**
@@ -489,7 +542,8 @@ function makeAttachmentCard(attachment: AttachmentInfo, options: { removable?: b
   const card = document.createElement('div')
   card.className = 'attach-card'
   card.dataset.attachmentId = attachment.id
-  const retryable = attachment.status === 'error' && attachment.retryable === true
+  const retryable =
+    !editing && attachment.status === 'error' && attachment.retryable === true
   if (attachment.status === 'error') card.classList.add('is-error')
   if (retryable) {
     card.classList.add('is-retryable')
@@ -651,7 +705,9 @@ function scheduleAttachmentStatusPoll(): void {
       Date.now() < attachmentStatusUntil
     if (!waiting) return
     const ids = attachments.map((attachment) => attachment.id)
-    const updates = await window.ds?.getAttachmentStatuses(ids)
+    const updates = editing
+      ? await window.ds?.getEditAttachmentStatuses(ids)
+      : await window.ds?.getAttachmentStatuses(ids)
     if (!updates?.length) {
       attachmentStatusTimer = window.setTimeout(tick, 600)
       return
@@ -687,6 +743,7 @@ function scheduleAttachmentStatusPoll(): void {
 }
 
 function retryAttachment(attachment: AttachmentInfo): void {
+  if (editing) return
   if (attachment.status !== 'error' || !attachment.retryable) return
   attachment.status = 'uploading'
   attachment.error = undefined
@@ -698,9 +755,16 @@ function retryAttachment(attachment: AttachmentInfo): void {
 }
 
 function removeAttachment(id: string): void {
+  const index = attachments.findIndex((attachment) => attachment.id === id)
+  if (index < 0) return
+  if (editing) {
+    void window.ds?.removeEditAttachment(id, index)
+    editExistingIds.delete(id)
+  } else {
+    void window.ds?.removeAttachment(id)
+  }
   attachments = attachments.filter((attachment) => attachment.id !== id)
   if (activeAttachmentId === id) closeAttachmentPanel()
-  void window.ds?.removeAttachment(id)
   renderAttachmentTray()
 }
 
@@ -943,7 +1007,7 @@ function requestHistoryToggle(): void {
     window.ds?.toggleQuickHistory(false)
     return
   }
-  if (busy || stopping || historyLoading) return
+  if (busy || stopping || historyLoading || editing) return
 
   applyHistoryPanel(true)
   window.ds?.toggleQuickHistory(true)
@@ -1096,6 +1160,17 @@ function makeCopyButton(read: () => string): HTMLButtonElement {
   button.setAttribute('aria-label', t('quick.copy'))
   button.innerHTML = COPY_ICON
   button.addEventListener('click', () => void copyText(read(), button))
+  return button
+}
+
+function makeEditButton(group: HTMLElement): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'msg-edit-btn'
+  button.title = t('quick.editMessage')
+  button.setAttribute('aria-label', t('quick.editMessage'))
+  button.innerHTML = EDIT_ICON
+  button.addEventListener('click', () => void startEdit(group))
   return button
 }
 
@@ -1498,18 +1573,6 @@ function markThinkingDone(group: HTMLElement): void {
   block.classList.remove('is-thinking')
   const title = block.querySelector('.think-title')
   if (title) title.textContent = thinkingTitle(thinking)
-}
-
-/** 当前正在输出/刚结束的那条 AI 消息 */
-function currentAnswerGroup(): HTMLElement | null {
-  const streaming = streamingBody?.closest('.msg-group') as HTMLElement | null
-  if (streaming) return streaming
-
-  const groups = Array.from(messagesInner.querySelectorAll('.msg-group-ai')) as HTMLElement[]
-  for (let i = groups.length - 1; i >= 0; i -= 1) {
-    if (groups[i].querySelector('.search-top, .search-pill')) return groups[i]
-  }
-  return groups[groups.length - 1] ?? null
 }
 
 function addSearchBottom(group: HTMLElement, info: SearchInfo): void {
@@ -1957,6 +2020,8 @@ function closeAttachmentPanel(keepWindow = false): void {
 
 attachmentPanelClose.addEventListener('click', () => closeAttachmentPanel())
 attachButton.addEventListener('click', () => void pickAttachments())
+cancelEditButton.addEventListener('click', () => void cancelEdit())
+modifyEditButton.addEventListener('click', submitEdit)
 
 // 从 Finder 复制的单个文件：粘贴时直接导入；格式不支持则静默忽略
 document.addEventListener('paste', (event) => {
@@ -2057,7 +2122,12 @@ function buildMessageGroup(
     decorateCitations(body, citationSources)
   }
 
+  if (kind === 'user') {
+    userMessageData.set(group, { text, attachments })
+  }
+
   const actions = group.querySelector('.msg-actions') as HTMLElement
+  if (kind === 'user') actions.appendChild(makeEditButton(group))
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
 
   if (kind === 'ai' && thinking) {
@@ -2084,6 +2154,18 @@ function setStreamingState(body: HTMLElement | null, streaming: boolean): void {
   body?.closest('.msg-group')?.classList.toggle('is-streaming', streaming)
 }
 
+/** 只给最后一条用户消息标出编辑入口；回答生成中把操作行藏起来 */
+function syncUserMessageActions(): void {
+  const users = messagesInner.querySelectorAll('.msg-group-user')
+  const latest = users[users.length - 1] as HTMLElement | undefined
+  for (const group of Array.from(users)) {
+    const el = group as HTMLElement
+    el.classList.toggle('is-latest-user', el === latest)
+    el.classList.toggle('is-answering', el === latest && (busy || !!streamingBody))
+    el.classList.toggle('is-editing-message', el === editGroup && editing)
+  }
+}
+
 function appendMessage(
   kind: 'user' | 'ai',
   text: string,
@@ -2105,6 +2187,7 @@ function appendMessage(
     attachments,
   )
   messagesInner.appendChild(group)
+  syncUserMessageActions()
   updateScrollButton()
   return body
 }
@@ -2156,6 +2239,7 @@ function prependMessages(history: HistoryMessage[]): void {
   messagesInner.insertBefore(fragment, messagesInner.firstChild)
 
   messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
+  syncUserMessageActions()
   updateScrollButton()
 }
 
@@ -2176,6 +2260,7 @@ function prependOneHistoryMessage(message: HistoryMessage): void {
     message.attachments,
   )
   messagesInner.insertBefore(group, messagesInner.firstChild)
+  syncUserMessageActions()
 }
 
 /**
@@ -2322,6 +2407,13 @@ function clearMessages(): void {
   streamingBody = null
   thinkingEl = null
   continueButton = null
+  editing = false
+  editStarting = false
+  editSubmitting = false
+  editGroup = null
+  editExistingIds.clear()
+  setEditingUi(false)
+  syncUserMessageActions()
 }
 
 // ── 「继续生成」按钮 ─────────────────────────────────────────
@@ -2427,7 +2519,191 @@ function resetToEmpty(): void {
 
 // ── 发送 ──────────────────────────────────────────────────────
 
+// ── 修改最新消息 ──────────────────────────────────────────────
+
+function latestUserGroup(): HTMLElement | null {
+  const groups = messagesInner.querySelectorAll('.msg-group-user')
+  return (groups[groups.length - 1] as HTMLElement | undefined) ?? null
+}
+
+function setEditingUi(on: boolean): void {
+  app.classList.toggle('is-editing', on)
+  cancelEditButton.hidden = !on
+  modifyEditButton.hidden = !on
+  if (!on) {
+    modifyEditButton.disabled = true
+    cancelEditButton.disabled = false
+  }
+  syncSendState()
+  syncUserMessageActions()
+}
+
+function replaceUserMessageContent(
+  group: HTMLElement,
+  text: string,
+  attachmentList: AttachmentInfo[],
+): void {
+  const user = group.querySelector('.msg-user') as HTMLElement | null
+  const bubble = user?.querySelector('.bubble') as HTMLElement | null
+  if (!user || !bubble) return
+  bubble.textContent = text
+  user.querySelector('.msg-attachments')?.remove()
+  const row = buildSentAttachments(attachmentList)
+  if (row) {
+    user.insertBefore(row, bubble)
+    user.classList.toggle('no-text', text.trim().length === 0)
+  } else {
+    user.classList.remove('no-text')
+  }
+}
+
+async function startEdit(group: HTMLElement): Promise<void> {
+  if (editing || editStarting || busy || stopping || historyLoading) return
+  if (group !== latestUserGroup()) return
+  const data = userMessageData.get(group)
+  if (!data) return
+
+  if (searchPanelOpen) closeSearchPanel()
+  if (attachmentPanelOpen) closeAttachmentPanel()
+  editStarting = true
+  try {
+    const result = await window.ds?.startEdit()
+    if (!result?.ok) {
+      showAttachmentNotice(result?.error || t('quick.editOpenFailed'))
+      return
+    }
+    editDraftText = input.value
+    editDraftAttachments = attachments.slice()
+    const existing = (data.attachments ?? []).map((attachment) => ({
+      ...attachment,
+      status: 'ready' as const,
+      error: undefined,
+      retryable: undefined,
+    }))
+    editExistingIds = new Set(existing.map((attachment) => attachment.id))
+    attachments = existing
+    editing = true
+    editSubmitting = false
+    editGroup = group
+    input.value = data.text
+    autosize()
+    renderAttachmentTray()
+    setEditingUi(true)
+    attachmentStatusUntil = Date.now() + 30_000
+    scheduleAttachmentStatusPoll()
+    focusInput()
+    input.setSelectionRange(input.value.length, input.value.length)
+  } finally {
+    editStarting = false
+  }
+}
+
+async function cancelEdit(): Promise<void> {
+  if (!editing || editSubmitting) return
+  editing = false
+  editGroup = null
+  editExistingIds.clear()
+  input.value = editDraftText
+  attachments = editDraftAttachments
+  editDraftText = ''
+  editDraftAttachments = []
+  attachmentStatusUntil = 0
+  setEditingUi(false)
+  renderAttachmentTray()
+  autosize()
+  await window.ds?.cancelEdit()
+  focusInput()
+}
+
+function submitEdit(): void {
+  if (!editing || editSubmitting) return
+  const text = input.value.trim()
+  if (!text && attachments.length === 0) return
+  if (
+    attachments.some(
+      (attachment) => attachment.status === 'error' || attachment.status === 'uploading',
+    )
+  ) {
+    showAttachmentNotice(t('quick.attachProcessing'))
+    return
+  }
+
+  editSubmitting = true
+  syncEditButtonState()
+  const attachmentIds = attachments
+    .filter((attachment) => !editExistingIds.has(attachment.id))
+    .map((attachment) => attachment.id)
+  window.ds?.submitEdit({
+    text,
+    attachmentIds,
+    deepThink: isPressed(deepThinkButton),
+    smartSearch: isPressed(smartSearchButton),
+  })
+}
+
+/** 主进程确认网页已经接受修改：替换用户消息、删掉原回答，然后进入等待态 */
+function applyEditOnAnswerStart(): void {
+  const group = editGroup
+  if (!editing || !group) return
+  const text = input.value.trim()
+  const editedAttachments = attachments.slice()
+
+  replaceUserMessageContent(group, text, editedAttachments)
+  let node = group.nextElementSibling
+  while (node) {
+    const next = node.nextElementSibling
+    node.remove()
+    node = next
+  }
+
+  if (historyAllMessages) {
+    let index = -1
+    for (let i = historyAllMessages.length - 1; i >= 0; i -= 1) {
+      if (historyAllMessages[i].role === 'user') {
+        index = i
+        break
+      }
+    }
+    if (index >= 0) {
+      historyAllMessages[index] = {
+        ...historyAllMessages[index],
+        text,
+        attachments: editedAttachments.length ? editedAttachments : undefined,
+      }
+      historyAllMessages.length = index + 1
+    }
+  }
+
+  userMessageData.set(group, {
+    text,
+    attachments: editedAttachments.length ? editedAttachments : undefined,
+  })
+  // 和普通发送一样，把修改后的用户消息顶到可视区顶部，新回答才会出现在眼前
+  if (group.isConnected) alignMessageToTop(group, false)
+  // 清掉旧回答留下的流式状态，否则深度思考的第一条事件可能挂到旧气泡上
+  streamingBody = null
+  thinkingEl = null
+  continueBody = null
+  hideContinueButton()
+  editing = false
+  editSubmitting = false
+  editGroup = null
+  editExistingIds.clear()
+  attachments = []
+  input.value = ''
+  editDraftText = ''
+  editDraftAttachments = []
+  attachmentStatusUntil = 0
+  setEditingUi(false)
+  renderAttachmentTray()
+  autosize()
+  addThinking()
+  updateScrollButton()
+  syncUserMessageActions()
+}
+
 function submit(): void {
+  if (editing || editSubmitting) return
   const text = input.value.trim()
   const selectedAttachments = attachments.slice()
   // 有文字或附件才能发；stopping 时等主进程确认前不要发下一条
@@ -2511,6 +2787,7 @@ function submit(): void {
   input.value = ''
   autosize()
   syncSendState()
+  syncUserMessageActions()
   // 发送后光标留在输入框，方便接着写下一句
   focusInput()
 
@@ -2554,7 +2831,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         const ensured = ensureStreamingAnswerGroup()
         group = ensured?.group ?? null
       }
-      if (!group) group = currentAnswerGroup()
+      // 没有正在生成的新气泡时不能退回去挂到上一条回答上
       if (!group) break
 
       if (typeof event.answerIndex === 'number') {
@@ -2588,7 +2865,6 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         const ensured = ensureStreamingAnswerGroup()
         group = ensured?.group ?? null
       }
-      if (!group) group = currentAnswerGroup()
       if (!group) break
 
       if (typeof event.answerIndex === 'number') {
@@ -2624,6 +2900,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       stopping = false
       hideContinueButton()
       syncSendState()
+      syncUserMessageActions()
       updateScrollButton()
       // 回答结束，光标回到输入框
       focusInput()
@@ -2643,6 +2920,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         if (wasStopping) {
           busy = true
           syncSendState()
+          syncUserMessageActions()
         }
         break
       }
@@ -2658,6 +2936,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       streamingBody = null
       busy = false
       syncSendState()
+      syncUserMessageActions()
       // DeepSeek 只有最新一条被截断的回答会给出「继续生成」
       if (event.canContinue) showContinueButton()
       updateScrollButton()
@@ -2697,6 +2976,12 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     }
 
     case 'error': {
+      if (editing) {
+        editSubmitting = false
+        syncEditButtonState()
+        showAttachmentNotice(event.message)
+        break
+      }
       removeThinking()
       releaseTail()
       setStreamingState(streamingBody, false)
@@ -2717,12 +3002,13 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       }
       appendMessage('ai', `${t('quick.error')}：${event.message}`)
       syncSendState()
+      syncUserMessageActions()
       updateScrollButton()
       break
     }
 
     case 'history-shortcut': {
-      if (busy || stopping || historyLoading) break
+      if (busy || stopping || historyLoading || editing) break
       if (historyOpen) {
         applyHistoryPanel(false)
         window.ds?.toggleQuickHistory(false)
@@ -2855,6 +3141,8 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     }
 
     case 'answer-start': {
+      // 修改消息被网页接受：替换原问题、删掉原回答，然后进入普通等待态
+      if (editSubmitting) applyEditOnAnswerStart()
       // 提交时已经放过呼吸点；继续生成时这里负责切回「停止」态
       busy = true
       stopping = false
@@ -2863,6 +3151,7 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
       pendingSubmission = null
       if (attachments.length) clearAttachments()
       syncSendState()
+      syncUserMessageActions()
       break
     }
   }

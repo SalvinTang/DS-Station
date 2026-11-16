@@ -1,6 +1,6 @@
 {
   "name": "ds-station",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "private": true,
   "description": "DS Station —— DeepSeek macOS 桌面客户端（非官方）",
   "main": "out/main/index.js",

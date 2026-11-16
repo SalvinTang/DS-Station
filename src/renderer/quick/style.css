@@ -894,6 +894,35 @@ body {
   pointer-events: auto;
 }
 
+/* 回答生成期间，最新的一条用户消息不显示编辑和复制 */
+.msg-group-user.is-answering .msg-actions {
+  display: none;
+}
+
+/* 只有最新一条用户消息显示编辑入口 */
+.msg-group-user:not(.is-latest-user) .msg-edit-btn {
+  display: none;
+}
+
+.msg-edit-btn {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  margin-right: 12px;
+  margin-left: -2px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--copy-fg);
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.msg-edit-btn:hover {
+  background: var(--hover-bg);
+}
+
 .msg-actions:not(.right) {
   margin-left: -2px;
 }
@@ -952,7 +981,8 @@ body {
   display: inline-flex;
   flex: none;
   margin-right: 6px;
-  color: var(--think-icon);
+  /* 设计指定：正在思考 / 已思考（用时 X 秒）前的图标 */
+  color: #5686ef;
 }
 
 .think-title {
@@ -1633,6 +1663,74 @@ body {
 
 .toolbar .spacer {
   flex: 1;
+}
+
+/* 修改最新消息：取消 / 修改，尺寸与设计稿的 50×26 胶囊一致 */
+.edit-action-btn {
+  min-width: 50px;
+  height: 26px;
+  flex: none;
+  padding: 0 12px;
+  border-radius: 13px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  cursor: pointer;
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.edit-action-btn[hidden] {
+  display: none;
+}
+
+.edit-cancel-btn {
+  border: 1px solid var(--tool-border);
+  background: transparent;
+  color: var(--text);
+}
+
+.edit-cancel-btn:hover {
+  background: var(--hover-bg);
+}
+
+.edit-submit-btn {
+  border: 0;
+  background: var(--send-bg);
+  color: var(--send-fg);
+}
+
+.edit-submit-btn:disabled {
+  background: var(--tool-border);
+  color: var(--placeholder);
+  cursor: default;
+}
+
+.edit-submit-btn:not(:disabled):hover {
+  background: var(--send-hover);
+}
+
+.app.is-editing #history,
+.app.is-editing #send {
+  display: none;
+}
+
+.app.is-editing .composer {
+  border-color: var(--send-hover);
+}
+
+@media (prefers-color-scheme: light) {
+  .app.is-editing .composer {
+    border-color: var(--composer-border);
+  }
+}
+
+.app.is-editing .msg-group-user.is-editing-message .msg-edit-btn {
+  display: none;
+}
+
+.edit-action-btn:focus-visible {
+  outline: 2px solid var(--send-bg);
+  outline-offset: 1px;
 }
 
 /* 设计稿：高 26 的胶囊，图标 14、文字 12px，内缩 7 / 9 */

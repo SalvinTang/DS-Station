@@ -82,7 +82,9 @@ export type ComposerToggleKey = (typeof COMPOSER_TOGGLES)[number]
  * 输入区开关不在此列：它们见 COMPOSER_TOGGLES，按 DOM 顺序取。
  */
 export const TEXT_MATCHERS: Partial<Record<SelectorKey, readonly string[]>> = {
-  newChat: ['新对话', '开启新对话', '新建对话', 'New chat'],
+  // 不能把单独的「新对话」放进来：侧栏里旧的无标题会话也叫「新对话」，
+  // 按文字优先会点到历史会话，而不是顶部的「开启新对话」按钮。
+  newChat: ['开启新对话', '新建对话', 'New chat'],
 }
 
 /** 表示「开」的状态类名 */
@@ -165,6 +167,30 @@ export function pagePrelude(): string {
      * （「开启新对话」就是典型）。点击内层元素同样会冒泡到外层的处理函数，
      * 所以钻到最深层最稳。
      */
+    /**
+     * 当前这一轮回答的 DOM 容器：最后一条用户消息后面的第一条助手消息。
+     *
+     * 编辑消息会保留旧分支，页面上可能同时出现新旧回答；不能再统按
+     * “最后一条回答”或全局下标取，否则深度思考会读到旧内容。
+     */
+    const dsCurrentTurnRoot = () => {
+      const items = Array.from(document.querySelectorAll('[data-virtual-list-item-key]'));
+      let userIndex = -1;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        if (items[i].querySelector('.d29f3d7d.ds-message')) {
+          userIndex = i;
+          break;
+        }
+      }
+      if (userIndex < 0) return null;
+      for (let i = userIndex + 1; i < items.length; i += 1) {
+        if (items[i].querySelector('.ds-assistant-message-main-content, .ds-think-content')) {
+          return items[i];
+        }
+      }
+      return items[userIndex + 1] || null;
+    };
+
     const dsDeepest = (el) => {
       const text = dsText(el);
       let node = el;
@@ -251,8 +277,41 @@ export function pagePrelude(): string {
     };
 
     /** 统一入口：注册表 + 文字匹配 + 特例 */
+    /**
+     * 新建对话。
+     *
+     * 侧栏里无标题的历史会话也会显示成「新对话」；如果按文字直接找，
+     * 会点到那条历史记录，于是每次“新对话”都重新打开同一个会话。
+     * 这里优先找「开启新对话 / 新建对话」，并明确排除历史链接。
+     */
+    const dsFindNewChat = () => {
+      const history = (el) => !!el.closest('a[href^="/a/chat/s/"]');
+      const candidates = Array.from(
+        document.querySelectorAll('.ds-button, [role="button"], button, a'),
+      );
+      for (const el of candidates) {
+        if (!dsVisible(el) || history(el)) continue;
+        const text = dsText(el);
+        if (!text || text.length > 24) continue;
+        if (/开启新对话|新建对话|New chat/i.test(text)) return el;
+      }
+
+      // 顶部按钮的文字节点可能不在 .ds-button / role=button / a 里
+      const byText = dsFindByText(['开启新对话', '新建对话', 'New chat']);
+      if (byText && !history(byText)) return byText;
+
+      // 结构兜底：顶部左侧的大按钮
+      const fallback = Array.from(document.querySelectorAll('[role="button"], button'))
+        .find((el) => {
+          const r = el.getBoundingClientRect();
+          return r.width >= 80 && r.height >= 30 && r.x >= 0 && r.x < 220 && r.y < 120;
+        });
+      return fallback || null;
+    };
+
     const dsFind = (key, requireVisible = true) => {
       if (key === 'deepThinkToggle' || key === 'smartSearchToggle') return dsFindToggle(key);
+      if (key === 'newChat') return dsFindNewChat();
       if (DS_TEXT_MATCHERS[key]) return dsFindByText(DS_TEXT_MATCHERS[key]);
       if (key === 'sendButton') return dsFindSend();
       return dsPick(key, requireVisible);
