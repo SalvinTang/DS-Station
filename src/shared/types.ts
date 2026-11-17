@@ -181,6 +181,12 @@ export type QuickEvent =
       /** 这条回答在网页里的序号，打开结果栏时按需拉完整列表 */
       answerIndex?: number
     }
+  /** 回答结束后从接口补一次完整搜索结果，保证上下气泡不会漏显示 */
+  | {
+      type: 'answer-search-info'
+      info: SearchInfo
+      answerIndex?: number
+    }
   /** 回答结束 */
   | { type: 'answer-done' }
   /**

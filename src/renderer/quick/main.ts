@@ -2287,7 +2287,16 @@ function historyPageHeight(): number {
   return Math.max(200, messages.clientHeight || 400)
 }
 
-function prependOneHistoryMessage(message: HistoryMessage): void {
+/** 某条消息在当前主链里的 AI 回答下标（结果栏按需加载时使用） */
+function answerIndexAt(all: HistoryMessage[], index: number): number {
+  let count = 0
+  for (let i = 0; i < index; i += 1) {
+    if (all[i].role === 'ai') count += 1
+  }
+  return count
+}
+
+function prependOneHistoryMessage(message: HistoryMessage, answerIndex?: number): void {
   const { group } = buildMessageGroup(
     message.role === 'user' ? 'user' : 'ai',
     message.text,
@@ -2298,6 +2307,9 @@ function prependOneHistoryMessage(message: HistoryMessage): void {
     message.thinking,
     message.attachments,
   )
+  if (message.role !== 'user' && typeof answerIndex === 'number') {
+    groupAnswerIndex.set(group, answerIndex)
+  }
   messagesInner.insertBefore(group, messagesInner.firstChild)
   syncUserMessageActions()
 }
@@ -2323,7 +2335,7 @@ function renderApiHistoryInitial(
   // 第一阶段：只渲染最后一组；更早的两页缓冲等首屏画完再补
   for (let i = lastUser; i < all.length; i += 1) {
     const message = all[i]
-    appendMessage(
+    const body = appendMessage(
       message.role === 'user' ? 'user' : 'ai',
       message.text,
       message.html,
@@ -2333,6 +2345,10 @@ function renderApiHistoryInitial(
       message.thinking,
       message.attachments,
     )
+    if (message.role !== 'user') {
+      const group = body.closest('.msg-group') as HTMLElement | null
+      if (group) groupAnswerIndex.set(group, answerIndexAt(all, i))
+    }
   }
 
   historyRenderedStart = lastUser
@@ -2357,7 +2373,7 @@ function renderApiHistoryOlderBuffer(epoch: number, all: HistoryMessage[], lastU
     const index = renderedStart - 1
     const oldHeight = messages.scrollHeight
     const oldTop = messages.scrollTop
-    prependOneHistoryMessage(all[index])
+    prependOneHistoryMessage(all[index], answerIndexAt(all, index))
     messages.scrollTop = oldTop + (messages.scrollHeight - oldHeight)
     renderedStart = index
   }
@@ -2385,7 +2401,7 @@ function renderOlderFromMemory(): void {
 
   while (start > 0) {
     const index = start - 1
-    prependOneHistoryMessage(all[index])
+    prependOneHistoryMessage(all[index], answerIndexAt(all, index))
     start = index
     if (messages.scrollHeight - oldHeight >= page) break
   }
@@ -2933,6 +2949,31 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
           if (group.querySelector('.search-pill')) addSearchBottom(group, info)
         }
         if (!busy) completeSearchBottom(group)
+      }
+      updateScrollButton()
+      break
+    }
+
+    case 'answer-search-info': {
+      let group = streamingBody?.closest('.msg-group') as HTMLElement | null
+      if (!group) group = latestAnswerGroup()
+      if (!group) break
+
+      if (typeof event.answerIndex === 'number') {
+        groupAnswerIndex.set(group, event.answerIndex)
+      }
+      groupSearchInfo.set(group, event.info)
+
+      if (group.querySelector('.think-block')) {
+        // 深度思考时搜索结果在思考块内部，这里只补底部聚合胶囊
+        addSearchBottom(group, event.info)
+      } else {
+        attachSearchUi(group, event.info)
+      }
+      // 结果栏此时可能还在 loading，补到完整数据后直接渲染
+      if (searchPanelOpen && activeSearchGroup === group && activeSearchIndex === undefined) {
+        renderSearchPanel(event.info)
+        searchPanelList.scrollTop = 0
       }
       updateScrollButton()
       break

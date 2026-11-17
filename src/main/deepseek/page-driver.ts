@@ -1068,6 +1068,7 @@ export class DeepSeekPage {
   async readCurrentSearchInfo(
     answerIndex?: number,
     searchIndex?: number,
+    sessionId?: string | null,
   ): Promise<SearchInfo | null> {
     await this.installApiHeaderHook()
 
@@ -1080,9 +1081,13 @@ export class DeepSeekPage {
         try {
           const headers = window.__dsApiHeaders || null;
           if (!headers) return { error: 'no headers' };
-          const pathMatch = location.pathname.match(/\\/a\\/chat\\/s\\/([^/?#]+)/);
-          if (!pathMatch) return { noSearch: true };
-          const sessionId = decodeURIComponent(pathMatch[1]);
+          const providedSession = ${JSON.stringify(sessionId ?? null)};
+          let sessionId = typeof providedSession === 'string' && providedSession ? providedSession : '';
+          if (!sessionId) {
+            const pathMatch = location.pathname.match(/\\/a\\/chat\\/s\\/([^/?#]+)/);
+            if (!pathMatch) return { noSearch: true };
+            sessionId = decodeURIComponent(pathMatch[1]);
+          }
 
           const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
           const wantedSearch = ${typeof searchIndex === 'number' ? String(searchIndex) : 'null'};

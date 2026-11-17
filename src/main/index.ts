@@ -927,6 +927,7 @@ function registerIpcHandlers(): void {
       const info: SearchInfo | null = await page.readCurrentSearchInfo(
         answerIndex,
         searchIndex as number | undefined,
+        activeHistoryId,
       )
       if (epoch !== quickViewEpoch) return null
       return info
@@ -1457,6 +1458,27 @@ async function streamAnswer(
 
   if (token.cancelled) return
   if (!got) throw new Error('没有读到回答')
+
+  /*
+   * 网页上的搜索摘要偶尔会晚于正文出现，或者 a[data] 还没渲染出来。
+   * 回答结束后从当前主链接口补一次完整搜索结果，确保顶部/底部搜索气泡不会漏掉。
+   */
+  if (options.smartSearch && viewEpoch === quickViewEpoch) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const info = await page.readCurrentSearchInfo(options.answerIndex)
+      if (info && info.sources.some((source) => source.url)) {
+        if (viewEpoch === quickViewEpoch && !token.cancelled) {
+          quick.sendEvent({
+            type: 'answer-search-info',
+            info,
+            answerIndex: options.answerIndex,
+          })
+        }
+        break
+      }
+      await delay(400)
+    }
+  }
 
   // 回答结束时最后确认一次思考状态和用时
   if (options.deepThink && viewEpoch === quickViewEpoch) {
