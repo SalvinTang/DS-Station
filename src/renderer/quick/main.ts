@@ -31,6 +31,10 @@ import { clearMarkdownCache, renderApiMarkdown } from './markdown-render'
 
 const MIN_WINDOW_HEIGHT = 100
 const MAX_WINDOW_HEIGHT = 200
+/** 输入框最多 2 万字符，超出不再接收 */
+const MAX_INPUT_CHARS = 20_000
+/** 历史切换列表最多展示最新 50 条 */
+const MAX_HISTORY_ITEMS = 50
 /** 一行的高度：line-height 22 + 上下 padding 各 3 */
 const TEXTAREA_MIN = 28
 /** 输入框之外的固定开销：外框描边 2 + 上下 padding 15/7 + 工具栏 36 */
@@ -64,6 +68,12 @@ const COPY_ICON = `
 const EDIT_ICON = `
   <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
     <path d="M9.94076 1.34942C10.7047 0.90231 11.6503 0.902415 12.4143 1.34942C12.7061 1.52015 12.9688 1.79118 13.3104 2.13284C13.6521 2.47448 13.9231 2.73721 14.0939 3.02894C14.5408 3.79294 14.5409 4.73856 14.0939 5.50251C13.9231 5.79415 13.652 6.05704 13.3104 6.39861L6.65932 13.0497C6.28068 13.4284 6.00695 13.7108 5.66543 13.9097C5.32391 14.1085 4.94315 14.2074 4.42705 14.3498L3.24394 14.6761C2.77527 14.8054 2.34538 14.9262 2.00131 14.9684C1.65196 15.0112 1.17964 15.0013 0.810764 14.6325C0.441921 14.2637 0.432107 13.7913 0.47486 13.442C0.517035 13.0979 0.6379 12.668 0.767181 12.1993L1.09352 11.0162C1.23588 10.5001 1.33481 10.1193 1.5336 9.77784C1.7325 9.43632 2.0149 9.1626 2.39355 8.78395L9.04466 2.13284C9.38625 1.79126 9.64911 1.52016 9.94076 1.34942ZM15.5427 14.8398H7.55223L8.96707 13.425H15.5427V14.8398ZM3.39382 9.78422C2.965 10.213 2.84244 10.3436 2.75709 10.49C2.67183 10.6366 2.61862 10.8079 2.45733 11.3925L2.13099 12.5756C2.00183 13.0439 1.92194 13.3419 1.88863 13.5536C2.10041 13.5204 2.39872 13.4416 2.86764 13.3123L4.05075 12.9859C4.63544 12.8246 4.80669 12.7715 4.95323 12.6862C5.09968 12.6008 5.23022 12.4783 5.65905 12.0494L10.721 6.98644L8.45577 4.72121L3.39382 9.78422ZM11.7 2.57079C11.3774 2.38198 10.9777 2.38198 10.6551 2.57079C10.5602 2.62647 10.4487 2.72931 10.0449 3.13311L9.45604 3.72094L11.7213 5.98617L12.3102 5.39833C12.7139 4.99457 12.8168 4.88307 12.8725 4.78818C13.0613 4.46561 13.0612 4.06585 12.8725 3.74326C12.8169 3.64827 12.7146 3.53752 12.3102 3.13311C11.9057 2.72863 11.795 2.6264 11.7 2.57079Z" fill="currentColor"/>
+  </svg>`
+
+/** 和网页「重新生成」相同的圆形箭头 */
+const REGENERATE_ICON = `
+  <svg viewBox="0 0 16 16" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052 13.9557 3.29894L15.1281 2.12759C15.3303 1.92546 15.6767 2.06943 15.6767 2.35538V5.53923C15.6766 5.71626 15.5329 5.85976 15.3559 5.86002H12.171C11.8854 5.8597 11.7426 5.51465 11.9443 5.31249L12.9641 4.29056C11.8237 2.74305 9.98908 1.74106 7.92136 1.74097C4.46436 1.74097 1.66233 4.543 1.66233 8C1.66233 11.457 4.46436 14.259 7.92136 14.259C11.3782 14.2589 14.1804 11.4569 14.1804 8H15.5722C15.5722 12.2251 12.1465 15.6507 7.92136 15.6508C3.69614 15.6508 0.270508 12.2252 0.270508 8C0.270508 3.77478 3.69614 0.349152 7.92136 0.349152Z" fill="currentColor"/>
   </svg>`
 
 const SEARCH_ICON = `
@@ -278,6 +288,9 @@ let editGroup: HTMLElement | null = null
 let editExistingIds = new Set<string>()
 let editDraftText = ''
 let editDraftAttachments: AttachmentInfo[] = []
+/** 正在等重新生成开始 */
+let regenSubmitting = false
+let regenGroup: HTMLElement | null = null
 /** 右侧附件预览栏 */
 let attachmentPanelOpen = false
 let activeAttachmentId: string | null = null
@@ -948,6 +961,12 @@ function applyPendingHistorySelection(): void {
 }
 
 function renderHistoryItems(items: HistoryEntry[], append: boolean): void {
+  const remaining = append
+    ? Math.max(0, MAX_HISTORY_ITEMS - historyList.children.length)
+    : MAX_HISTORY_ITEMS
+  items = items.slice(0, remaining)
+  if (!items.length && append) return
+
   if (!append) {
     /*
      * 连续开合时接口很快会返回同一份列表。
@@ -1171,6 +1190,17 @@ function makeEditButton(group: HTMLElement): HTMLButtonElement {
   button.setAttribute('aria-label', t('quick.editMessage'))
   button.innerHTML = EDIT_ICON
   button.addEventListener('click', () => void startEdit(group))
+  return button
+}
+
+function makeRegenerateButton(group: HTMLElement): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = 'msg-regen-btn'
+  button.title = t('quick.regenerate')
+  button.setAttribute('aria-label', t('quick.regenerate'))
+  button.innerHTML = REGENERATE_ICON
+  button.addEventListener('click', () => regenerateAnswer(group))
   return button
 }
 
@@ -2129,6 +2159,7 @@ function buildMessageGroup(
   const actions = group.querySelector('.msg-actions') as HTMLElement
   if (kind === 'user') actions.appendChild(makeEditButton(group))
   actions.appendChild(makeCopyButton(() => body.textContent ?? ''))
+  if (kind === 'ai') actions.appendChild(makeRegenerateButton(group))
 
   if (kind === 'ai' && thinking) {
     // 历史对话里的思考块默认收起；搜索行在思考块内部，不再单独挂顶部气泡
@@ -2163,6 +2194,14 @@ function syncUserMessageActions(): void {
     el.classList.toggle('is-latest-user', el === latest)
     el.classList.toggle('is-answering', el === latest && (busy || !!streamingBody))
     el.classList.toggle('is-editing-message', el === editGroup && editing)
+  }
+
+  const answers = messagesInner.querySelectorAll('.msg-group-ai')
+  const latestAnswer = answers[answers.length - 1] as HTMLElement | undefined
+  for (const group of Array.from(answers)) {
+    const el = group as HTMLElement
+    el.classList.toggle('is-latest-answer', el === latestAnswer)
+    el.classList.toggle('is-regenerating', el === latestAnswer && regenSubmitting)
   }
 }
 
@@ -2412,6 +2451,8 @@ function clearMessages(): void {
   editSubmitting = false
   editGroup = null
   editExistingIds.clear()
+  regenSubmitting = false
+  regenGroup = null
   setEditingUi(false)
   syncUserMessageActions()
 }
@@ -2526,6 +2567,20 @@ function latestUserGroup(): HTMLElement | null {
   return (groups[groups.length - 1] as HTMLElement | undefined) ?? null
 }
 
+function latestAnswerGroup(): HTMLElement | null {
+  const groups = messagesInner.querySelectorAll('.msg-group-ai')
+  return (groups[groups.length - 1] as HTMLElement | undefined) ?? null
+}
+
+function regenerateAnswer(group: HTMLElement): void {
+  if (busy || stopping || historyLoading || editing || regenSubmitting) return
+  if (group !== latestAnswerGroup()) return
+  regenSubmitting = true
+  regenGroup = group
+  syncUserMessageActions()
+  window.ds?.regenerateLatestAnswer()
+}
+
 function setEditingUi(on: boolean): void {
   app.classList.toggle('is-editing', on)
   cancelEditButton.hidden = !on
@@ -2585,7 +2640,7 @@ async function startEdit(group: HTMLElement): Promise<void> {
     editing = true
     editSubmitting = false
     editGroup = group
-    input.value = data.text
+    input.value = data.text.slice(0, MAX_INPUT_CHARS)
     autosize()
     renderAttachmentTray()
     setEditingUi(true)
@@ -2617,6 +2672,7 @@ async function cancelEdit(): Promise<void> {
 
 function submitEdit(): void {
   if (!editing || editSubmitting) return
+  clampInputLength()
   const text = input.value.trim()
   if (!text && attachments.length === 0) return
   if (
@@ -2639,6 +2695,28 @@ function submitEdit(): void {
     deepThink: isPressed(deepThinkButton),
     smartSearch: isPressed(smartSearchButton),
   })
+}
+
+/** 主进程确认网页已经开始重新生成：删掉旧回答，进入等待态 */
+function applyRegenerateOnAnswerStart(): void {
+  const group = regenGroup
+  if (!regenSubmitting || !group) return
+  const user = latestUserGroup()
+  group.remove()
+  streamingBody = null
+  thinkingEl = null
+  continueBody = null
+  hideContinueButton()
+  regenSubmitting = false
+  regenGroup = null
+  if (historyAllMessages && historyAllMessages.length) {
+    const last = historyAllMessages[historyAllMessages.length - 1]
+    if (last.role === 'ai') historyAllMessages.pop()
+  }
+  if (user) alignMessageToTop(user, false)
+  addThinking()
+  updateScrollButton()
+  syncUserMessageActions()
 }
 
 /** 主进程确认网页已经接受修改：替换用户消息、删掉原回答，然后进入等待态 */
@@ -2704,6 +2782,7 @@ function applyEditOnAnswerStart(): void {
 
 function submit(): void {
   if (editing || editSubmitting) return
+  clampInputLength()
   const text = input.value.trim()
   const selectedAttachments = attachments.slice()
   // 有文字或附件才能发；stopping 时等主进程确认前不要发下一条
@@ -2982,6 +3061,13 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
         showAttachmentNotice(event.message)
         break
       }
+      if (regenSubmitting) {
+        regenSubmitting = false
+        regenGroup = null
+        syncUserMessageActions()
+        showAttachmentNotice(event.message)
+        break
+      }
       removeThinking()
       releaseTail()
       setStreamingState(streamingBody, false)
@@ -3027,7 +3113,8 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     case 'history-list': {
       if (!historyOpen) break
       renderHistoryItems(event.items, event.append)
-      historyHasMore = event.hasMore
+      historyHasMore =
+        event.hasMore && historyList.children.length < MAX_HISTORY_ITEMS
       historyLoadPending = false
       break
     }
@@ -3141,6 +3228,8 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
     }
 
     case 'answer-start': {
+      // 重新生成被网页接受：删掉旧回答，进入普通等待态
+      if (regenSubmitting) applyRegenerateOnAnswerStart()
       // 修改消息被网页接受：替换原问题、删掉原回答，然后进入普通等待态
       if (editSubmitting) applyEditOnAnswerStart()
       // 提交时已经放过呼吸点；继续生成时这里负责切回「停止」态
@@ -3159,7 +3248,14 @@ window.ds?.onQuickEvent((event: QuickEvent) => {
 
 // ── 交互绑定 ──────────────────────────────────────────────────
 
+function clampInputLength(): void {
+  if (input.value.length > MAX_INPUT_CHARS) {
+    input.value = input.value.slice(0, MAX_INPUT_CHARS)
+  }
+}
+
 input.addEventListener('input', () => {
+  clampInputLength()
   autosize()
   syncSendState()
 })
@@ -3208,7 +3304,14 @@ historyButton?.addEventListener('click', () => requestHistoryToggle())
 
 // 历史列表滚到接近底部：按需再向页面要一屏（不显示 loading）
 historyList.addEventListener('scroll', () => {
-  if (!historyOpen || !historyHasMore || historyLoadPending) return
+  if (
+    !historyOpen ||
+    !historyHasMore ||
+    historyLoadPending ||
+    historyList.children.length >= MAX_HISTORY_ITEMS
+  ) {
+    return
+  }
   const remaining = historyList.scrollHeight - historyList.scrollTop - historyList.clientHeight
   if (remaining > 80) return
   historyLoadPending = true

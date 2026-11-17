@@ -943,6 +943,10 @@ function registerIpcHandlers(): void {
     void handleQuickSubmit(payload)
   })
 
+  ipcMain.on('ds:quick-regenerate', () => {
+    void handleQuickRegenerate()
+  })
+
   ipcMain.on('ds:quick-edit-submit', (_event, payload: QuickEditSubmitPayload) => {
     void handleQuickEditSubmit(payload)
   })
@@ -1296,7 +1300,7 @@ function startAttachmentPreparation(ids: string[]): void {
 async function streamAnswer(
   page: DeepSeekPage,
   quick: QuickWindow,
-  options: { deepThink: boolean; smartSearch: boolean; answerIndex: number; currentTurn?: boolean },
+  options: { deepThink: boolean; smartSearch: boolean; answerIndex: number; currentTurn?: boolean; watchAll?: boolean },
   baseline: string[],
   token: StreamToken,
   viewEpoch: number,
@@ -1313,7 +1317,7 @@ async function streamAnswer(
   // 开了深度思考时，搜索气泡在思考块内部，由 thinking 事件一起带过去；
   // 只有「只搜索、不深度思考」才走原来的顶部搜索气泡。
   const summaryWatcher =
-    options.smartSearch && !options.deepThink
+    options.smartSearch && (!options.deepThink || options.watchAll === true)
       ? (async () => {
           while (
             !stopSummaryWatch &&
@@ -1400,7 +1404,7 @@ async function streamAnswer(
     })
   }
 
-  const thinkingWatcher = options.deepThink
+  const thinkingWatcher = options.deepThink || options.watchAll === true
     ? (async () => {
         while (!stopThinkingWatch && !token.cancelled && viewEpoch === quickViewEpoch) {
           const thinking = await page.readCurrentThinking(options.answerIndex, options.currentTurn === true)
@@ -1730,6 +1734,77 @@ async function handleQuickEditSubmit(payload: QuickEditSubmitPayload): Promise<v
   quick.sendEvent({ type: 'answer-done' })
 }
 
+/** 重新生成最新一条回答：点网页当前轮的重新生成，再按当前轮读取新回答 */
+async function handleQuickRegenerate(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+  if (activeToken) {
+    quick.sendEvent({ type: 'error', message: translate(currentLanguage(), 'quick.editWaitAnswer') })
+    return
+  }
+
+  const page = new DeepSeekPage(win.pageView)
+  const token: StreamToken = { cancelled: false }
+  activeToken = token
+  const viewEpoch = ++quickViewEpoch
+
+  try {
+    if (activeHistoryId) {
+      const target = activeHistoryId
+      activeHistoryId = null
+      const switched = await page.switchToHistory(target)
+      if (!switched) throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+      await delay(500)
+    }
+    await page.installApiHeaderHook()
+
+    const baseline = await page.listAnswers()
+    if (!(await page.clickRegenerateLastAnswer())) {
+      throw new Error(translate(currentLanguage(), 'quick.regenerateFailed'))
+    }
+
+    let answerIndex = Math.max(0, baseline.length - 1)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const count = (await page.listAnswers()).length
+      if (count > baseline.length) {
+        answerIndex = baseline.length
+        break
+      }
+      if (count < baseline.length) {
+        answerIndex = Math.max(0, count - 1)
+        break
+      }
+      await delay(150)
+    }
+
+    await streamAnswer(
+      page,
+      quick,
+      {
+        deepThink: true,
+        smartSearch: true,
+        watchAll: true,
+        currentTurn: true,
+        answerIndex,
+      },
+      baseline,
+      token,
+      viewEpoch,
+    )
+  } catch (err) {
+    if (token.cancelled) return
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[快捷窗口] 重新生成失败:', message)
+    quick.sendEvent({ type: 'error', message })
+    return
+  } finally {
+    if (activeToken === token) activeToken = null
+  }
+
+  quick.sendEvent({ type: 'answer-done' })
+}
+
 /**
  * 停止生成：点掉 DeepSeek 页面上的停止按钮，并告诉面板停在哪。
  *
@@ -1839,6 +1914,8 @@ async function handleContinueGeneration(): Promise<void> {
 
 /** 接口一次取回 100 条，快捷窗口每次先显示 30 条，滚动再追加 */
 const HISTORY_API_CHUNK = 30
+/** 历史切换最多展示最新 50 条 */
+const HISTORY_MAX_ITEMS = 50
 
 let historyPanelOpen = false
 let historyLoadingMore = false
@@ -1866,7 +1943,15 @@ let quickViewEpoch = 0
 /** 把接口列表里下一段（30 条）推给快捷窗口 */
 function sendApiHistoryChunk(quick: QuickWindow): void {
   const items = historyApiItems ?? []
-  const next = items.slice(historyApiSent, historyApiSent + HISTORY_API_CHUNK)
+  const remaining = Math.max(0, HISTORY_MAX_ITEMS - historyApiSent)
+  if (!remaining) {
+    quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+    return
+  }
+  const next = items.slice(
+    historyApiSent,
+    historyApiSent + Math.min(HISTORY_API_CHUNK, remaining),
+  )
   // 第一次发送是覆盖，后续滚动加载是追加
   const append = historyApiSent > 0
   historyApiSent += next.length
@@ -1875,7 +1960,9 @@ function sendApiHistoryChunk(quick: QuickWindow): void {
     type: 'history-list',
     items: next,
     append,
-    hasMore: historyApiSent < items.length || historyApiHasMore,
+    hasMore:
+      historyApiSent < Math.min(items.length, HISTORY_MAX_ITEMS) ||
+      (historyApiHasMore && historyApiSent < HISTORY_MAX_ITEMS),
   })
 }
 
@@ -1950,13 +2037,17 @@ async function handleHistoryToggle(open: boolean): Promise<void> {
 
   if (epoch !== historyListEpoch || !historyPanelOpen) return
   console.log(`[历史] 列表来源=dom，${result.items.length} 条`)
-  for (const item of result.items) historySentIds.add(item.id)
+  const domItems = result.items.slice(0, HISTORY_MAX_ITEMS)
+  for (const item of domItems) historySentIds.add(item.id)
   quick.sendEvent({
     type: 'history-list',
-    items: result.items,
+    items: domItems,
     append: false,
-    // 列表比视口高就说明可能还有下一页；至少让用户有机会加载一次
-    hasMore: result.scrollable && result.items.length > 0,
+    // 列表比视口高、且还没到 50 条时，才允许继续加载
+    hasMore:
+      result.scrollable &&
+      domItems.length > 0 &&
+      domItems.length < HISTORY_MAX_ITEMS,
   })
 }
 
@@ -1968,6 +2059,10 @@ async function handleHistoryMore(): Promise<void> {
   historyLoadingMore = true
   const epoch = historyListEpoch
   try {
+    if (historyApiItems && historyApiSent >= HISTORY_MAX_ITEMS) {
+      quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+      return
+    }
     // 接口路径：内存里还有就直接发；没有就带 cursor 再取一页
     if (historyApiItems) {
       if (historyApiSent < historyApiItems.length) {
@@ -2018,7 +2113,10 @@ async function handleHistoryMore(): Promise<void> {
     // 侧边栏加载下一页需要一点时间；等太短会误判成「到底了」
     await delay(1200)
     const { items } = await page.readHistory()
-    const fresh = items.filter((item) => !historySentIds.has(item.id))
+    const remaining = Math.max(0, HISTORY_MAX_ITEMS - historySentIds.size)
+    const fresh = items
+      .filter((item) => !historySentIds.has(item.id))
+      .slice(0, remaining)
     for (const item of fresh) historySentIds.add(item.id)
 
     if (epoch !== historyListEpoch || !historyPanelOpen) return
@@ -2026,8 +2124,8 @@ async function handleHistoryMore(): Promise<void> {
       type: 'history-list',
       items: fresh,
       append: true,
-      // 这一屏确实拉到了新内容，就认为后面可能还有；没有新增就到底了
-      hasMore: fresh.length > 0,
+      // 这一屏确实拉到了新内容，且还没到 50 条，就认为后面可能还有
+      hasMore: fresh.length > 0 && historySentIds.size < HISTORY_MAX_ITEMS,
     })
   } finally {
     historyLoadingMore = false

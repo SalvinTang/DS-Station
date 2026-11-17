@@ -307,6 +307,9 @@ export interface DsApi {
   /** 提交一条消息，主进程会驱动主窗口里的 DeepSeek 网页完成这次对话 */
   submitQuickMessage: (payload: QuickSubmitPayload) => void
 
+  /** 重新生成最新一条回答 */
+  regenerateLatestAnswer: () => void
+
   /** 打开网页里最后一条用户消息的编辑框 */
   startEdit: () => Promise<QuickEditStartResult>
 

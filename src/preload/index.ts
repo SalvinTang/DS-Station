@@ -34,6 +34,7 @@ const api: DsApi = {
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
   resizeQuickWindow: (height) => ipcRenderer.send('ds:quick-resize', height),
   submitQuickMessage: (payload: QuickSubmitPayload) => ipcRenderer.send('ds:quick-submit', payload),
+  regenerateLatestAnswer: () => ipcRenderer.send('ds:quick-regenerate'),
   startEdit: () => ipcRenderer.invoke('ds:start-edit'),
   cancelEdit: () => ipcRenderer.invoke('ds:cancel-edit'),
   submitEdit: (payload: QuickEditSubmitPayload) => ipcRenderer.send('ds:quick-edit-submit', payload),

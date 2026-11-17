@@ -435,6 +435,24 @@ export class DeepSeekPage {
     )
   }
 
+  /** 点当前轮回答下方的「重新生成」 */
+  async clickRegenerateLastAnswer(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const root = dsCurrentTurnRoot();
+        if (!root) return false;
+        const buttons = Array.from(root.querySelectorAll('[role=button],button,.ds-button'));
+        const btn = buttons.find((el) => {
+          const d = el.querySelector('svg path')?.getAttribute('d') || '';
+          return d.startsWith('M7.92136');
+        });
+        if (!btn) return false;
+        btn.click();
+        return true;
+      `)) === true
+    )
+  }
+
   /** 取消编辑，恢复原消息 */
   async cancelEdit(): Promise<boolean> {
     return (

@@ -1324,6 +1324,32 @@ body {
 .copy-btn:hover {
   background: var(--hover-bg);
 }
+.msg-regen-btn {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  margin-left: 12px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--copy-fg);
+  cursor: pointer;
+  transition: background 0.14s ease;
+}
+
+.msg-regen-btn:hover {
+  background: var(--hover-bg);
+}
+
+.msg-group-ai:not(.is-latest-answer) .msg-regen-btn {
+  display: none;
+}
+
+.msg-group-ai.is-regenerating .msg-actions,
+.app.is-editing .msg-regen-btn {
+  display: none;
+}
 
 /* 等待回答时的呼吸点 */
 .thinking {
