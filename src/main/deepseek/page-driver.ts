@@ -215,6 +215,270 @@ export class DeepSeekPage {
     )
   }
 
+  /** 当前网页是否打开了消息编辑框 */
+  async isEditOpen(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        return !!document.querySelector('textarea[name="user query"]');
+      `)) === true
+    )
+  }
+
+  /** 点最后一条用户消息下面的铅笔按钮 */
+  async clickEditLastUserMessage(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const msgs = Array.from(document.querySelectorAll('.d29f3d7d.ds-message'));
+        const msg = msgs[msgs.length - 1];
+        if (!msg || !msg.parentElement) return false;
+        const buttons = Array.from(msg.parentElement.querySelectorAll('[role=button],button'));
+        const edit = buttons.find((el) => {
+          const d = el.querySelector('svg path')?.getAttribute('d') || '';
+          return d.startsWith('M9.94076');
+        });
+        if (!edit) return false;
+        edit.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 编辑框里的原始文字 */
+  async readEditText(): Promise<string | null> {
+    return this.run<string | null>(`
+      const ta = document.querySelector('textarea[name="user query"]');
+      return ta ? ta.value : null;
+    `)
+  }
+
+  /** 写编辑框文字；和主输入框一样必须走原生 setter */
+  async setEditText(text: string): Promise<boolean> {
+    const json = JSON.stringify(text)
+    return (
+      (await this.run<boolean>(`
+        const el = document.querySelector('textarea[name="user query"]');
+        if (!el) return false;
+        el.focus();
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        if (setter) setter.call(el, ${json});
+        else el.value = ${json};
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 编辑框内附件卡片的实时状态；顺序与原消息附件 + 新加附件一致 */
+  async readEditAttachmentStatuses(): Promise<
+    Array<{ status: 'uploading' | 'ready' | 'error'; error?: string; retryable?: boolean }>
+  > {
+    return (
+      (await this.run<
+        Array<{ status: 'uploading' | 'ready' | 'error'; error?: string; retryable?: boolean }>
+      >(`
+        const ta = document.querySelector('textarea[name="user query"]');
+        let root = null;
+        if (ta) {
+          let n = ta.parentElement;
+          while (n && n !== document.body) {
+            const hasFile = !!n.querySelector('input[type=file]');
+            const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+              .some((b) => (b.innerText || '').trim() === '取消');
+            if (hasFile && hasCancel) { root = n; break; }
+            n = n.parentElement;
+          }
+        }
+        if (!root) return [];
+        return Array.from(root.querySelectorAll('.ds-animated-size-item')).map((card) => {
+          const text = (card.innerText || '').trim();
+          const retryIcon = !!card.querySelector('svg[width="16"]');
+          const uploadFailed = retryIcon || /上传失败|Upload failed|Failed to upload/i.test(text);
+          const noText = /无法提取|未提取到文字|No text/i.test(text);
+          const parseFailed = /解析失败|Parsing failed|File exceeds|文件超过|格式不支持|Not supported/i.test(text);
+          const error = uploadFailed || noText || parseFailed;
+          const uploading = /上传中|正在上传|上传处理中|解析中|等待中|Pending|Uploading|Parsing/i.test(text);
+          return {
+            status: error ? 'error' : uploading ? 'uploading' : 'ready',
+            error: error ? (text || '上传失败') : undefined,
+            retryable: uploadFailed,
+          };
+        });
+      `)) ?? []
+    )
+  }
+
+  /** 把本机文件交给编辑框的 file input，而不是底部主输入框 */
+  async attachFilesToEdit(
+    files: Array<{ url: string; name: string; type: string }>,
+  ): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        return (async () => {
+          const ta = document.querySelector('textarea[name="user query"]');
+          let root = null;
+          if (ta) {
+            let n = ta.parentElement;
+            while (n && n !== document.body) {
+              const hasFile = !!n.querySelector('input[type=file]');
+              const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+                .some((b) => (b.innerText || '').trim() === '取消');
+              if (hasFile && hasCancel) { root = n; break; }
+              n = n.parentElement;
+            }
+          }
+          const input = root ? root.querySelector('input[type=file]') : null;
+          if (!input) return false;
+          try {
+            const files = await Promise.all(${JSON.stringify(files)}.map(async (item) => {
+              const response = await fetch(item.url);
+              if (!response.ok) throw new Error('fetch ' + response.status);
+              const blob = await response.blob();
+              return new File([blob], item.name, { type: item.type || 'application/octet-stream' });
+            }));
+            const transfer = new DataTransfer();
+            for (const file of files) transfer.items.add(file);
+            Object.defineProperty(input, 'files', {
+              value: transfer.files,
+              configurable: true,
+            });
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          } catch (error) {
+            console.error('[DeepSeek] 编辑框附件注入失败:', error);
+            return false;
+          }
+        })();
+      `)) === true
+    )
+  }
+
+  /** 移除编辑框里的第 index 张附件卡片 */
+  async removeEditAttachment(index: number): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const ta = document.querySelector('textarea[name="user query"]');
+        let root = null;
+        if (ta) {
+          let n = ta.parentElement;
+          while (n && n !== document.body) {
+            const hasFile = !!n.querySelector('input[type=file]');
+            const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+              .some((b) => (b.innerText || '').trim() === '取消');
+            if (hasFile && hasCancel) { root = n; break; }
+            n = n.parentElement;
+          }
+        }
+        if (!root) return false;
+        const cards = Array.from(root.querySelectorAll('.ds-animated-size-item'));
+        const card = cards[${String(Math.max(0, Math.floor(index)))}];
+        if (!card) return false;
+        const removeSvg = card.querySelector('svg[width="14"]');
+        const button = removeSvg?.closest('div');
+        if (!button) return false;
+        button.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 点编辑框里的「发送」 */
+  async clickEditSend(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const ta = document.querySelector('textarea[name="user query"]');
+        let root = null;
+        if (ta) {
+          let n = ta.parentElement;
+          while (n && n !== document.body) {
+            const hasFile = !!n.querySelector('input[type=file]');
+            const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+              .some((b) => (b.innerText || '').trim() === '取消');
+            if (hasFile && hasCancel) { root = n; break; }
+            n = n.parentElement;
+          }
+        }
+        if (!root) return false;
+        const btn = Array.from(root.querySelectorAll('[role=button],button'))
+          .find((el) => (el.innerText || '').trim() === '发送');
+        if (!btn) return false;
+        const cls = String(btn.className || '');
+        if (cls.includes('ds-button--disabled') || btn.getAttribute('aria-disabled') === 'true') return false;
+        btn.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 编辑框里的「发送」是否可点 */
+  async isEditSendEnabled(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const ta = document.querySelector('textarea[name="user query"]');
+        let root = null;
+        if (ta) {
+          let n = ta.parentElement;
+          while (n && n !== document.body) {
+            const hasFile = !!n.querySelector('input[type=file]');
+            const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+              .some((b) => (b.innerText || '').trim() === '取消');
+            if (hasFile && hasCancel) { root = n; break; }
+            n = n.parentElement;
+          }
+        }
+        if (!root) return false;
+        const btn = Array.from(root.querySelectorAll('[role=button],button'))
+          .find((el) => (el.innerText || '').trim() === '发送');
+        if (!btn) return false;
+        const cls = String(btn.className || '');
+        return !cls.includes('ds-button--disabled') && btn.getAttribute('aria-disabled') !== 'true';
+      `)) === true
+    )
+  }
+
+  /** 点当前轮回答下方的「重新生成」 */
+  async clickRegenerateLastAnswer(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const root = dsCurrentTurnRoot();
+        if (!root) return false;
+        const buttons = Array.from(root.querySelectorAll('[role=button],button,.ds-button'));
+        const btn = buttons.find((el) => {
+          const d = el.querySelector('svg path')?.getAttribute('d') || '';
+          return d.startsWith('M7.92136');
+        });
+        if (!btn) return false;
+        btn.click();
+        return true;
+      `)) === true
+    )
+  }
+
+  /** 取消编辑，恢复原消息 */
+  async cancelEdit(): Promise<boolean> {
+    return (
+      (await this.run<boolean>(`
+        const ta = document.querySelector('textarea[name="user query"]');
+        let root = null;
+        if (ta) {
+          let n = ta.parentElement;
+          while (n && n !== document.body) {
+            const hasFile = !!n.querySelector('input[type=file]');
+            const hasCancel = Array.from(n.querySelectorAll('[role=button],button'))
+              .some((b) => (b.innerText || '').trim() === '取消');
+            if (hasFile && hasCancel) { root = n; break; }
+            n = n.parentElement;
+          }
+        }
+        if (!root) return false;
+        const btn = Array.from(root.querySelectorAll('[role=button],button'))
+          .find((el) => (el.innerText || '').trim() === '取消');
+        if (!btn) return false;
+        btn.click();
+        return true;
+      `)) === true
+    )
+  }
+
   /** 点击失败卡片左侧的圆形箭头，让 DeepSeek 自己重新上传 */
   async retryComposerAttachment(index: number): Promise<boolean> {
     return (
@@ -608,6 +872,7 @@ export class DeepSeekPage {
         for (const sel of DS_SELECTORS.assistantMessage) {
           let nodes;
           try { nodes = Array.from(document.querySelectorAll(sel)); } catch (e) { continue; }
+          nodes = nodes.filter(dsVisible);
           if (!nodes.length) continue;
           return nodes.map(dsReadAnswer).filter(Boolean);
         }
@@ -638,15 +903,22 @@ export class DeepSeekPage {
     baseline: string[],
     timeoutMs = 45000,
     token?: StreamToken,
+    currentTurn = false,
   ): Promise<boolean> {
     const baseLast = baseline.length ? baseline[baseline.length - 1] : ''
     const deadline = Date.now() + timeoutMs
 
     while (Date.now() < deadline) {
       if (token?.cancelled) return false
-      const answers = await this.listAnswers()
-      const last = answers.length ? answers[answers.length - 1] : ''
-      if (last && last !== baseLast) return true
+      if (currentTurn) {
+        const rich = await this.lastAnswerRich(true)
+        const last = rich?.text ?? ''
+        if (last && last !== baseLast) return true
+      } else {
+        const answers = await this.listAnswers()
+        const last = answers.length ? answers[answers.length - 1] : ''
+        if (last && last !== baseLast) return true
+      }
       await delay(POLL_INTERVAL)
     }
     return false
@@ -657,11 +929,20 @@ export class DeepSeekPage {
    * HTML 直接来自 `.ds-assistant-message-main-content`，
    * 由快捷窗口做白名单清洗后显示。
    */
-  async lastAnswerRich(): Promise<{ text: string; html: string } | null> {
+  async lastAnswerRich(
+    currentTurn = false,
+  ): Promise<{ text: string; html: string } | null> {
     return this.run<{ text: string; html: string }>(`
+      if (${currentTurn ? 'true' : 'false'}) {
+        const root = dsCurrentTurnRoot();
+        const el = root?.querySelector('.ds-assistant-message-main-content');
+        if (el && dsVisible(el)) return { text: dsReadAnswer(el), html: el.outerHTML };
+        return null;
+      }
       for (const sel of DS_SELECTORS.assistantMessage) {
         let nodes;
-        try { nodes = document.querySelectorAll(sel); } catch (e) { continue; }
+        try { nodes = Array.from(document.querySelectorAll(sel)); } catch (e) { continue; }
+        nodes = nodes.filter(dsVisible);
         if (!nodes.length) continue;
         const el = nodes[nodes.length - 1];
         return { text: dsReadAnswer(el), html: el.outerHTML };
@@ -681,6 +962,7 @@ export class DeepSeekPage {
     onUpdate: (text: string, html: string) => void,
     timeoutMs = 120000,
     token?: StreamToken,
+    currentTurn = false,
   ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs
     let last = ''
@@ -691,7 +973,7 @@ export class DeepSeekPage {
     while (Date.now() < deadline) {
       // 用户点了停止：立刻退出，不再推增量
       if (token?.cancelled) return sawAnything
-      const rich = await this.lastAnswerRich()
+      const rich = await this.lastAnswerRich(currentTurn)
       const current = rich?.text ?? ''
       const html = rich?.html ?? ''
       const now = Date.now()
@@ -724,18 +1006,27 @@ export class DeepSeekPage {
    * 当前实时回答的搜索入口摘要（数量 + 前 4 个网站图标）。
    * 只读 DOM，回答一开始就能拿到，用来先把顶部搜索气泡显示出来。
    */
-  async readCurrentSearchSummary(answerIndex?: number): Promise<SearchSummary | null> {
+  async readCurrentSearchSummary(
+    answerIndex?: number,
+    currentTurn = false,
+  ): Promise<SearchSummary | null> {
     return this.run<SearchSummary | null>(`
-      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
+      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content')).filter(dsVisible);
       const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
-      const answer = index === null ? answers[answers.length - 1] : answers[index];
-      if (!answer) return null;
-
-      // 只看当前这条回答所在的消息容器，避免把上一条回答的搜索入口算进来
-      const messageRoot =
-        answer.closest('.ds-message') ||
-        answer.closest('[data-virtual-list-item-key]') ||
-        answer.parentElement;
+      let messageRoot = null;
+      let answer = null;
+      if (${currentTurn ? 'true' : 'false'}) {
+        messageRoot = dsCurrentTurnRoot();
+        answer = messageRoot?.querySelector('.ds-assistant-message-main-content') || null;
+      } else {
+        answer = index === null ? answers[answers.length - 1] : answers[index];
+        if (!answer) return null;
+        // 只看当前这条回答所在的消息容器，避免把上一条回答的搜索入口算进来
+        messageRoot =
+          answer.closest('.ds-message') ||
+          answer.closest('[data-virtual-list-item-key]') ||
+          answer.parentElement;
+      }
       if (!messageRoot) return null;
 
       let hit = null;
@@ -804,6 +1095,20 @@ export class DeepSeekPage {
           const biz = json && json.data && json.data.biz_data;
           const messages = (biz && biz.chat_messages) || [];
 
+          const byId = new Map(messages.map((m) => [String(m.message_id), m]));
+          const currentId = biz && biz.chat_session && biz.chat_session.current_message_id;
+          const chain = [];
+          const chainSeen = new Set();
+          let cursor = currentId !== undefined && currentId !== null
+            ? byId.get(String(currentId))
+            : null;
+          while (cursor && !chainSeen.has(String(cursor.message_id))) {
+            chainSeen.add(String(cursor.message_id));
+            chain.push(cursor);
+            cursor = byId.get(String(cursor.parent_id ?? ''));
+          }
+          chain.reverse();
+
           const hasSearch = (message) =>
             !!message &&
             (message.fragments || []).some(
@@ -813,7 +1118,7 @@ export class DeepSeekPage {
                 fragment.results.length > 0,
             );
 
-          const assistants = messages.filter((message) => message && message.role !== 'USER');
+          const assistants = (chain.length ? chain : messages).filter((message) => message && message.role !== 'USER');
           let target = index !== null ? assistants[index] : null;
           if (index === null) {
             for (let i = assistants.length - 1; i >= 0; i -= 1) {
@@ -886,7 +1191,10 @@ export class DeepSeekPage {
    *   THINK 正文 → 搜索行 → THINK 正文 → 浏览页面 → …
    * 这里按 DOM 顺序读出来，搜索详情仍然只保留数量和图标，点击后再按需拉。
    */
-  async readCurrentThinking(answerIndex?: number): Promise<ThinkingInfo | null> {
+  async readCurrentThinking(
+    answerIndex?: number,
+    currentTurn = false,
+  ): Promise<ThinkingInfo | null> {
     return this.run<ThinkingInfo | null>(`
       const textOf = (el) =>
         ((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, ' ').trim();
@@ -912,18 +1220,23 @@ export class DeepSeekPage {
         return icons;
       };
 
-      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content'));
+      const answers = Array.from(document.querySelectorAll('.ds-assistant-message-main-content')).filter(dsVisible);
       const index = ${typeof answerIndex === 'number' ? String(answerIndex) : 'null'};
       let messageRoot = null;
-      const answer =
-        index === null ? answers[answers.length - 1] : answers[index];
-      if (answer) {
-        messageRoot =
-          answer.closest('.ds-message') ||
-          answer.closest('[data-virtual-list-item-key]') ||
-          answer.parentElement;
+      if (${currentTurn ? 'true' : 'false'}) {
+        messageRoot = dsCurrentTurnRoot();
+      } else {
+        const answer =
+          index === null ? answers[answers.length - 1] : answers[index];
+        if (answer) {
+          messageRoot =
+            answer.closest('.ds-message') ||
+            answer.closest('[data-virtual-list-item-key]') ||
+            answer.parentElement;
+        }
       }
       if (!messageRoot) {
+        if (${currentTurn ? 'true' : 'false'}) return null;
         const messages = Array.from(document.querySelectorAll('.ds-message'));
         const lastMessage = messages[messages.length - 1] || null;
         const lastAnswer = answers[answers.length - 1] || null;
@@ -1083,7 +1396,26 @@ export class DeepSeekPage {
           if (json && json.code === 40003) return { error: 'invalid token' };
           const biz = json && json.data && json.data.biz_data;
           const messages = (biz && biz.chat_messages) || [];
-          const assistants = messages.filter((message) => message && message.role !== 'USER');
+
+          /*
+           * 接口返回整棵分支树；编辑消息后旧分支仍在数组里。
+           * 按 current_message_id 还原当前主链，避免 answerIndex 取到旧分支。
+           */
+          const byId = new Map(messages.map((m) => [String(m.message_id), m]));
+          const currentId = biz && biz.chat_session && biz.chat_session.current_message_id;
+          const chain = [];
+          const chainSeen = new Set();
+          let cursor = currentId !== undefined && currentId !== null
+            ? byId.get(String(currentId))
+            : null;
+          while (cursor && !chainSeen.has(String(cursor.message_id))) {
+            chainSeen.add(String(cursor.message_id));
+            chain.push(cursor);
+            cursor = byId.get(String(cursor.parent_id ?? ''));
+          }
+          chain.reverse();
+
+          const assistants = (chain.length ? chain : messages).filter((message) => message && message.role !== 'USER');
 
           const hasThink = (message) =>
             !!message &&
@@ -1218,9 +1550,13 @@ export class DeepSeekPage {
               if (Number.isFinite(updatedAt)) nextCursor = updatedAt;
               if (!id || seen.has(id)) continue;
               const title = typeof session.title === 'string' ? session.title.trim() : '';
-              if (!title) continue;
+              /*
+               * 刚创建、还没有自动命名的会话 title 为 null。
+               * 网页侧栏会把它显示成「新对话」，历史列表也必须保留，
+               * 否则用户会看到会话存在但历史里找不到。
+               */
               seen.add(id);
-              items.push({ id: id, title: title });
+              items.push({ id: id, title: title || '新对话' });
             }
 
             return { items: items, hasMore: biz.has_more === true, cursor: nextCursor };
@@ -1923,7 +2259,7 @@ export class DeepSeekPage {
     }
   }
 
-  private async scrollConversationToBottom(): Promise<boolean> {
+  async scrollConversationToBottom(): Promise<boolean> {
     return (
       (await this.run<boolean>(`
         const list = document.querySelector('.ds-virtual-list') ||

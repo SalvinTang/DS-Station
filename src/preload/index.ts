@@ -3,6 +3,7 @@ import type { Language } from '../shared/i18n'
 import type {
   DsApi,
   GuideStep,
+  QuickEditSubmitPayload,
   QuickEvent,
   QuickMode,
   QuickSubmitPayload,
@@ -33,6 +34,14 @@ const api: DsApi = {
   hideQuickWindow: () => ipcRenderer.send('ds:quick-hide'),
   resizeQuickWindow: (height) => ipcRenderer.send('ds:quick-resize', height),
   submitQuickMessage: (payload: QuickSubmitPayload) => ipcRenderer.send('ds:quick-submit', payload),
+  regenerateLatestAnswer: () => ipcRenderer.send('ds:quick-regenerate'),
+  startEdit: () => ipcRenderer.invoke('ds:start-edit'),
+  cancelEdit: () => ipcRenderer.invoke('ds:cancel-edit'),
+  submitEdit: (payload: QuickEditSubmitPayload) => ipcRenderer.send('ds:quick-edit-submit', payload),
+  getEditAttachmentStatuses: (ids: string[]) =>
+    ipcRenderer.invoke('ds:edit-attachment-statuses', ids),
+  removeEditAttachment: (id: string, index: number) =>
+    ipcRenderer.invoke('ds:remove-edit-attachment', id, index),
   stopQuickGeneration: () => ipcRenderer.send('ds:quick-stop'),
   continueQuickGeneration: () => ipcRenderer.send('ds:quick-continue'),
   toggleQuickHistory: (open: boolean) => ipcRenderer.send('ds:quick-history-toggle', open),

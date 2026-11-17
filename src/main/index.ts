@@ -7,6 +7,7 @@ import type {
   HistoryEntry,
   HistoryMessage,
   HotkeyUpdateResult,
+  QuickEditSubmitPayload,
   QuickMode,
   QuickSubmitPayload,
   SearchInfo,
@@ -158,6 +159,12 @@ let activeToken: StreamToken | null = null
 
 /** 空态选择附件时已经替用户开了新对话；发送时不要重复开 */
 let preparedNewChat = false
+/** 当前快捷窗口是否处于“修改最新消息”状态 */
+let editSessionActive = false
+/** 网页编辑框里原消息附件的数量，用于区分新加附件 */
+let editExistingCount = 0
+/** 修改消息时新加的本地附件 id；取消编辑时只清这些 */
+const editAttachmentIds = new Set<string>()
 /** 附件准备（插入网页）的进行中 Promise，按附件 id 跟踪 */
 const attachmentPrep = new Map<string, Promise<void>>()
 
@@ -655,6 +662,137 @@ function registerIpcHandlers(): void {
     startAttachmentPreparation(ids.filter((id): id is string => typeof id === 'string'))
   })
 
+  ipcMain.handle('ds:start-edit', async () => {
+    if (!mainWindow || !quickWindow) {
+      return { ok: false, error: translate(currentLanguage(), 'quick.editOpenFailed') }
+    }
+    if (activeToken) {
+      return { ok: false, error: translate(currentLanguage(), 'quick.editWaitAnswer') }
+    }
+
+    const page = new DeepSeekPage(mainWindow.pageView)
+    try {
+      if (activeHistoryId) {
+        const target = activeHistoryId
+        activeHistoryId = null
+        const switched = await page.switchToHistory(target)
+        if (!switched) throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+        await delay(500)
+      }
+
+      await page.scrollConversationToBottom()
+      await delay(250)
+      let clicked = await page.clickEditLastUserMessage()
+      if (!clicked) {
+        await page.scrollConversationToBottom()
+        await delay(450)
+        clicked = await page.clickEditLastUserMessage()
+      }
+      if (!clicked) throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+
+      let opened = false
+      for (let attempt = 0; attempt < 30 && !opened; attempt += 1) {
+        opened = await page.isEditOpen()
+        if (!opened) await delay(150)
+      }
+      if (!opened) throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+
+      editSessionActive = true
+      editAttachmentIds.clear()
+      editExistingCount = (await page.readEditAttachmentStatuses()).length
+      return { ok: true }
+    } catch (error) {
+      editSessionActive = false
+      editAttachmentIds.clear()
+      editExistingCount = 0
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : translate(currentLanguage(), 'quick.editOpenFailed'),
+      }
+    }
+  })
+
+  ipcMain.handle('ds:cancel-edit', async () => {
+    if (mainWindow) {
+      const page = new DeepSeekPage(mainWindow.pageView)
+      await page.cancelEdit()
+    }
+    editSessionActive = false
+    attachmentQueueEpoch += 1
+    for (const id of editAttachmentIds) {
+      attachmentPrep.delete(id)
+      removePendingAttachment(id)
+    }
+    editAttachmentIds.clear()
+    editExistingCount = 0
+  })
+
+  ipcMain.handle('ds:edit-attachment-statuses', async (_event, ids: unknown) => {
+    if (!mainWindow || !Array.isArray(ids)) return []
+    const wanted = ids.filter((id): id is string => typeof id === 'string')
+    const page = new DeepSeekPage(mainWindow.pageView)
+    const cards = await page.readEditAttachmentStatuses()
+    return wanted.map((id, index) => {
+      const attachment = getPendingAttachments([id])[0]
+      if (attachment?.prepareError) {
+        return {
+          id,
+          status: 'error',
+          error: attachment.prepareError,
+          retryable: attachment.retryable !== false,
+        }
+      }
+      const card = cards[index]
+      if (!card) return { id, status: 'uploading' }
+      if (card.status === 'error') {
+        let reason = (card.error || '').trim()
+        if (attachment?.name && reason.startsWith(attachment.name)) {
+          reason = reason.slice(attachment.name.length).trim()
+        }
+        const error = /未提取|无法提取|no text/i.test(reason)
+          ? '无法提取到文字'
+          : /解析失败|parse|FILE_PARSE|FILE_OVER_SIZE|file.*fail/i.test(reason)
+            ? '解析失败'
+            : /上传失败|upload/i.test(reason)
+              ? '上传失败'
+              : reason || '解析失败'
+        if (attachment) {
+          attachment.status = 'error'
+          attachment.error = error
+          attachment.retryable = card.retryable === true
+        }
+        return { id, status: 'error', error, retryable: card.retryable === true }
+      }
+      if (card.status === 'uploading') {
+        if (attachment) {
+          attachment.status = 'uploading'
+          attachment.retryable = undefined
+        }
+        return { id, status: 'uploading' }
+      }
+      if (attachment) {
+        attachment.status = 'ready'
+        attachment.error = undefined
+        attachment.retryable = undefined
+      }
+      return { id, status: 'ready' }
+    })
+  })
+
+  ipcMain.handle(
+    'ds:remove-edit-attachment',
+    async (_event, id: unknown, index: unknown) => {
+      if (!mainWindow || typeof id !== 'string' || typeof index !== 'number') return
+      const page = new DeepSeekPage(mainWindow.pageView)
+      await page.removeEditAttachment(index)
+      if (editAttachmentIds.delete(id)) {
+        attachmentPrep.delete(id)
+        removePendingAttachment(id)
+      }
+      if (index >= 0 && index < editExistingCount) editExistingCount -= 1
+    },
+  )
+
   ipcMain.handle('ds:attachment-statuses', async (_event, ids: unknown) => {
     if (!mainWindow || !Array.isArray(ids)) return []
     const wanted = ids.filter((id): id is string => typeof id === 'string')
@@ -805,6 +943,14 @@ function registerIpcHandlers(): void {
     void handleQuickSubmit(payload)
   })
 
+  ipcMain.on('ds:quick-regenerate', () => {
+    void handleQuickRegenerate()
+  })
+
+  ipcMain.on('ds:quick-edit-submit', (_event, payload: QuickEditSubmitPayload) => {
+    void handleQuickEditSubmit(payload)
+  })
+
   ipcMain.on('ds:quick-stop', () => void handleStopGeneration())
   ipcMain.on('ds:quick-continue', () => void handleContinueGeneration())
 
@@ -945,6 +1091,7 @@ async function handleLogout(): Promise<void> {
 
   cachedAccountName = null
   preparedNewChat = false
+  resetEditSession()
   resetAttachmentPreparation()
   clearPendingAttachments()
   clearHistoryAttachments()
@@ -1052,6 +1199,17 @@ function resetAttachmentPreparation(): void {
   attachmentPrep.clear()
 }
 
+/** 切历史 / 新对话 / 退出登录时退出修改模式，并清掉这次新加的本地附件 */
+function resetEditSession(): void {
+  editSessionActive = false
+  editExistingCount = 0
+  for (const id of editAttachmentIds) {
+    attachmentPrep.delete(id)
+    removePendingAttachment(id)
+  }
+  editAttachmentIds.clear()
+}
+
 function startAttachmentPreparation(ids: string[]): void {
   const batch = getPendingAttachments(ids)
   if (!batch.length) return
@@ -1081,19 +1239,25 @@ function startAttachmentPreparation(ids: string[]): void {
     }
 
     const page = new DeepSeekPage(win.pageView)
+    const editing = editSessionActive
+    if (editing) {
+      for (const attachment of batch) editAttachmentIds.add(attachment.id)
+    }
     try {
       if (epoch !== attachmentQueueEpoch) return
-      if (activeHistoryId) {
-        const target = activeHistoryId
-        activeHistoryId = null
-        await page.switchToHistory(target)
-        await delay(300)
-      } else if (quick.currentMode === 'empty' && !preparedNewChat) {
-        await page.startNewChat()
-        preparedNewChat = true
-        await delay(600)
+      if (!editing) {
+        if (activeHistoryId) {
+          const target = activeHistoryId
+          activeHistoryId = null
+          await page.switchToHistory(target)
+          await delay(300)
+        } else if (quick.currentMode === 'empty' && !preparedNewChat) {
+          await page.startNewChat()
+          preparedNewChat = true
+          await delay(600)
+        }
+        if (epoch !== attachmentQueueEpoch) return
       }
-      if (epoch !== attachmentQueueEpoch) return
 
       const bridge = await createAttachmentBridge(
         batch.map((attachment) => ({
@@ -1106,7 +1270,9 @@ function startAttachmentPreparation(ids: string[]): void {
         let injected = false
         for (let attempt = 0; attempt < 6 && !injected; attempt += 1) {
           if (epoch !== attachmentQueueEpoch) return
-          injected = await page.attachFiles(bridge.urls)
+          injected = editing
+            ? await page.attachFilesToEdit(bridge.urls)
+            : await page.attachFiles(bridge.urls)
           if (!injected) await delay(500)
         }
         if (epoch !== attachmentQueueEpoch) return
@@ -1128,6 +1294,183 @@ function startAttachmentPreparation(ids: string[]): void {
 
   const promise = attachmentPrepareQueue.then(task, task)
   attachmentPrepareQueue = promise
+}
+
+/** 把当前网页里这一轮新回答的思考、搜索和正文流式推给快捷窗口 */
+async function streamAnswer(
+  page: DeepSeekPage,
+  quick: QuickWindow,
+  options: { deepThink: boolean; smartSearch: boolean; answerIndex: number; currentTurn?: boolean; watchAll?: boolean },
+  baseline: string[],
+  token: StreamToken,
+  viewEpoch: number,
+): Promise<void> {
+  quick.sendEvent({ type: 'answer-start' })
+
+  /*
+   * 搜索摘要优先：一发现新回答的搜索入口就立刻推给快捷窗口，
+   * 只带数量和网站图标，让顶部气泡先出现；完整网页列表在后台拉。
+   * 回答正文不等待搜索，页面一开始输出就跟着流式显示。
+   */
+  let summarySent = false
+  let stopSummaryWatch = false
+  // 开了深度思考时，搜索气泡在思考块内部，由 thinking 事件一起带过去；
+  // 只有「只搜索、不深度思考」才走原来的顶部搜索气泡。
+  const summaryWatcher =
+    options.smartSearch && (!options.deepThink || options.watchAll === true)
+      ? (async () => {
+          while (
+            !stopSummaryWatch &&
+            !token.cancelled &&
+            viewEpoch === quickViewEpoch &&
+            !summarySent
+          ) {
+            const summary = await page.readCurrentSearchSummary(options.answerIndex, options.currentTurn === true)
+            if (summary) {
+              summarySent = true
+              // 只推摘要；完整网页列表等用户打开结果栏时再按需拉取
+              quick.sendEvent({
+                type: 'answer-search-summary',
+                summary,
+                answerIndex: options.answerIndex,
+              })
+              return
+            }
+            await delay(180)
+          }
+        })()
+      : Promise.resolve()
+
+  /*
+   * 深度思考增量：按网页折叠区里的片段顺序推 THINK 正文、
+   * 夹杂的搜索行和「浏览 N 个页面」；节流 300ms，内容不变不推。
+   */
+  let stopThinkingWatch = false
+  let lastThinkingJson = ''
+  let lastThinking: ThinkingInfo | null = null
+  let knownThinkingElapsed: number | undefined
+  let thinkingElapsedPromise: Promise<number | null> | null = null
+  let thinkingStartedAt: number | undefined
+  let answerStartedAt: number | undefined
+
+  const sendThinking = (thinking: ThinkingInfo): void => {
+    const json = JSON.stringify(thinking)
+    if (json === lastThinkingJson) return
+    lastThinkingJson = json
+    quick.sendEvent({
+      type: 'answer-thinking',
+      thinking,
+      answerIndex: options.answerIndex,
+    })
+  }
+
+  /*
+   * 网页标题行有时不会马上带出「用时 N 秒」，用接口里的
+   * THINK.elapsed_secs 补一次；拿到后所有后续 thinking 事件都带上它。
+   */
+  const ensureThinkingElapsed = async (): Promise<void> => {
+    if (!options.deepThink || knownThinkingElapsed !== undefined) return
+    if (!thinkingElapsedPromise) {
+      thinkingElapsedPromise = (async () => {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          if (viewEpoch !== quickViewEpoch) return null
+          const elapsed = await page.readThinkingElapsed(options.answerIndex)
+          if (elapsed !== null && elapsed > 0) return elapsed
+          await delay(250)
+        }
+        return null
+      })()
+    }
+
+    let elapsed = await thinkingElapsedPromise
+    thinkingElapsedPromise = null
+    if (viewEpoch !== quickViewEpoch) return
+
+    // 接口还没准备好时用本地时间兜底：从第一段思考出现到正文开始
+    if (elapsed === null && thinkingStartedAt !== undefined) {
+      const end = answerStartedAt ?? Date.now()
+      elapsed = Math.max(1, Math.round((end - thinkingStartedAt) / 1000))
+    }
+    if (elapsed === null) return
+
+    knownThinkingElapsed = elapsed
+    const latest = await page.readCurrentThinking(options.answerIndex, options.currentTurn === true)
+    const base = latest ?? lastThinking
+    if (!base) return
+    sendThinking({
+      ...base,
+      status: base.status === 'stopped' ? 'stopped' : 'done',
+      elapsedSecs: elapsed,
+    })
+  }
+
+  const thinkingWatcher = options.deepThink || options.watchAll === true
+    ? (async () => {
+        while (!stopThinkingWatch && !token.cancelled && viewEpoch === quickViewEpoch) {
+          const thinking = await page.readCurrentThinking(options.answerIndex, options.currentTurn === true)
+          if (thinking) {
+            lastThinking = thinking
+            if (thinkingStartedAt === undefined && thinking.status !== 'stopped') {
+              thinkingStartedAt = Date.now()
+            }
+            if (
+              knownThinkingElapsed !== undefined &&
+              thinking.status === 'done' &&
+              thinking.elapsedSecs === undefined
+            ) {
+              thinking.elapsedSecs = knownThinkingElapsed
+            }
+            if (thinking.elapsedSecs && thinking.elapsedSecs > 0) {
+              knownThinkingElapsed = thinking.elapsedSecs
+            }
+            sendThinking(thinking)
+            if (thinking.status === 'done' && thinking.elapsedSecs === undefined) {
+              void ensureThinkingElapsed()
+            }
+          }
+          await delay(300)
+        }
+      })()
+    : Promise.resolve()
+
+  const appeared = await page.waitForAnswerChange(baseline, 45000, token, options.currentTurn === true)
+  if (token.cancelled) return
+  if (!appeared) throw new Error('等不到新的回答')
+  answerStartedAt = Date.now()
+
+  // 正文开始前先补到最终用时，这样正文第一行出现时标题已经是
+  //「已思考（用时 N 秒）」，而不是先显示无时间的「已思考」。
+  if (options.deepThink) await ensureThinkingElapsed()
+
+  const got = await page.streamLastAnswer(
+    (text, html) => {
+      quick.sendEvent({ type: 'answer-update', text, html })
+    },
+    120000,
+    token,
+    options.currentTurn === true,
+  )
+
+  stopSummaryWatch = true
+  stopThinkingWatch = true
+  await Promise.all([summaryWatcher, thinkingWatcher])
+
+  if (token.cancelled) return
+  if (!got) throw new Error('没有读到回答')
+
+  // 回答结束时最后确认一次思考状态和用时
+  if (options.deepThink && viewEpoch === quickViewEpoch) {
+    const finalThinking = await page.readCurrentThinking(options.answerIndex, options.currentTurn === true)
+    if (finalThinking) {
+      if (knownThinkingElapsed !== undefined && !finalThinking.elapsedSecs) {
+        finalThinking.elapsedSecs = knownThinkingElapsed
+      }
+      sendThinking({
+        ...finalThinking,
+        status: finalThinking.status === 'thinking' ? 'done' : finalThinking.status,
+      })
+    }
+  }
 }
 
 /**
@@ -1247,176 +1590,212 @@ async function handleQuickSubmit(payload: QuickSubmitPayload): Promise<void> {
     preparedNewChat = false
     markAttachmentsSent(attachmentIds)
 
-    quick.sendEvent({ type: 'answer-start' })
-
-    /*
-     * 搜索摘要优先：一发现新回答的搜索入口就立刻推给快捷窗口，
-     * 只带数量和网站图标，让顶部气泡先出现；完整网页列表在后台拉。
-     * 回答正文不等待搜索，页面一开始输出就跟着流式显示。
-     */
-    let summarySent = false
-    let stopSummaryWatch = false
-    // 开了深度思考时，搜索气泡在思考块内部，由 thinking 事件一起带过去；
-    // 只有「只搜索、不深度思考」才走原来的顶部搜索气泡。
-    const summaryWatcher =
-      payload.smartSearch && !payload.deepThink
-        ? (async () => {
-            while (
-              !stopSummaryWatch &&
-              !token.cancelled &&
-              viewEpoch === quickViewEpoch &&
-              !summarySent
-            ) {
-              const summary = await page.readCurrentSearchSummary(baseline.length)
-              if (summary) {
-                summarySent = true
-                // 只推摘要；完整网页列表等用户打开结果栏时再按需拉取
-                quick.sendEvent({
-                  type: 'answer-search-summary',
-                  summary,
-                  answerIndex: baseline.length,
-                })
-                return
-              }
-              await delay(180)
-            }
-          })()
-        : Promise.resolve()
-
-    /*
-     * 深度思考增量：按网页折叠区里的片段顺序推 THINK 正文、
-     * 夹杂的搜索行和「浏览 N 个页面」；节流 300ms，内容不变不推。
-     */
-    let stopThinkingWatch = false
-    let lastThinkingJson = ''
-    let lastThinking: ThinkingInfo | null = null
-    let knownThinkingElapsed: number | undefined
-    let thinkingElapsedPromise: Promise<number | null> | null = null
-    let thinkingStartedAt: number | undefined
-    let answerStartedAt: number | undefined
-
-    const sendThinking = (thinking: ThinkingInfo): void => {
-      const json = JSON.stringify(thinking)
-      if (json === lastThinkingJson) return
-      lastThinkingJson = json
-      quick.sendEvent({
-        type: 'answer-thinking',
-        thinking,
+    await streamAnswer(
+      page,
+      quick,
+      {
+        deepThink: payload.deepThink,
+        smartSearch: payload.smartSearch,
         answerIndex: baseline.length,
-      })
-    }
-
-    /*
-     * 网页标题行有时不会马上带出「用时 N 秒」，用接口里的
-     * THINK.elapsed_secs 补一次；拿到后所有后续 thinking 事件都带上它。
-     */
-    const ensureThinkingElapsed = async (): Promise<void> => {
-      if (!payload.deepThink || knownThinkingElapsed !== undefined) return
-      if (!thinkingElapsedPromise) {
-        thinkingElapsedPromise = (async () => {
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            if (viewEpoch !== quickViewEpoch) return null
-            const elapsed = await page.readThinkingElapsed(baseline.length)
-            if (elapsed !== null && elapsed > 0) return elapsed
-            await delay(250)
-          }
-          return null
-        })()
-      }
-
-      let elapsed = await thinkingElapsedPromise
-      thinkingElapsedPromise = null
-      if (viewEpoch !== quickViewEpoch) return
-
-      // 接口还没准备好时用本地时间兜底：从第一段思考出现到正文开始
-      if (elapsed === null && thinkingStartedAt !== undefined) {
-        const end = answerStartedAt ?? Date.now()
-        elapsed = Math.max(1, Math.round((end - thinkingStartedAt) / 1000))
-      }
-      if (elapsed === null) return
-
-      knownThinkingElapsed = elapsed
-      const latest = await page.readCurrentThinking(baseline.length)
-      const base = latest ?? lastThinking
-      if (!base) return
-      sendThinking({
-        ...base,
-        status: base.status === 'stopped' ? 'stopped' : 'done',
-        elapsedSecs: elapsed,
-      })
-    }
-
-    const thinkingWatcher = payload.deepThink
-      ? (async () => {
-          while (!stopThinkingWatch && !token.cancelled && viewEpoch === quickViewEpoch) {
-            const thinking = await page.readCurrentThinking(baseline.length)
-            if (thinking) {
-              lastThinking = thinking
-              if (thinkingStartedAt === undefined && thinking.status !== 'stopped') {
-                thinkingStartedAt = Date.now()
-              }
-              if (
-                knownThinkingElapsed !== undefined &&
-                thinking.status === 'done' &&
-                thinking.elapsedSecs === undefined
-              ) {
-                thinking.elapsedSecs = knownThinkingElapsed
-              }
-              if (thinking.elapsedSecs && thinking.elapsedSecs > 0) {
-                knownThinkingElapsed = thinking.elapsedSecs
-              }
-              sendThinking(thinking)
-              if (thinking.status === 'done' && thinking.elapsedSecs === undefined) {
-                void ensureThinkingElapsed()
-              }
-            }
-            await delay(300)
-          }
-        })()
-      : Promise.resolve()
-
-    const appeared = await page.waitForAnswerChange(baseline, 45000, token)
-    if (token.cancelled) return
-    if (!appeared) throw new Error('等不到新的回答')
-    answerStartedAt = Date.now()
-
-    // 正文开始前先补到最终用时，这样正文第一行出现时标题已经是
-    //「已思考（用时 N 秒）」，而不是先显示无时间的「已思考」。
-    if (payload.deepThink) await ensureThinkingElapsed()
-
-    const got = await page.streamLastAnswer(
-      (text, html) => {
-        quick.sendEvent({ type: 'answer-update', text, html })
       },
-      120000,
+      baseline,
       token,
+      viewEpoch,
     )
 
-    stopSummaryWatch = true
-    stopThinkingWatch = true
-    await Promise.all([summaryWatcher, thinkingWatcher])
-
-    if (token.cancelled) return
-    if (!got) throw new Error('没有读到回答')
-
-    // 回答结束时最后确认一次思考状态和用时
-    if (payload.deepThink && viewEpoch === quickViewEpoch) {
-      const finalThinking = await page.readCurrentThinking(baseline.length)
-      if (finalThinking) {
-        if (knownThinkingElapsed !== undefined && !finalThinking.elapsedSecs) {
-          finalThinking.elapsedSecs = knownThinkingElapsed
-        }
-        sendThinking({
-          ...finalThinking,
-          status: finalThinking.status === 'thinking' ? 'done' : finalThinking.status,
-        })
-      }
-    }
   } catch (err) {
     // 用户点了停止：轮询提前退出，这不是错误，也不该再推 answer-done
     if (token.cancelled) return
     const message = err instanceof Error ? err.message : String(err)
     console.error('[快捷窗口] 提问失败:', message)
+    quick.sendEvent({ type: 'error', message })
+    return
+  } finally {
+    if (activeToken === token) activeToken = null
+  }
+
+  quick.sendEvent({ type: 'answer-done' })
+}
+
+/**
+ * 修改最新一条用户消息：网页编辑框已经打开，这里写入新文字、
+ * 同步开关和附件，然后让 DeepSeek 自己生成新分支。
+ */
+async function handleQuickEditSubmit(payload: QuickEditSubmitPayload): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+  if (!editSessionActive) {
+    quick.sendEvent({ type: 'error', message: translate(currentLanguage(), 'quick.editOpenFailed') })
+    return
+  }
+
+  const page = new DeepSeekPage(win.pageView)
+  const token: StreamToken = { cancelled: false }
+  activeToken = token
+  const viewEpoch = ++quickViewEpoch
+
+  try {
+    const attachmentIds = Array.isArray(payload.attachmentIds) ? payload.attachmentIds : []
+    const attachments = getPendingAttachments(attachmentIds)
+    if (attachments.length !== attachmentIds.length) {
+      throw new Error('附件选择已失效，请重新选择')
+    }
+    await Promise.all(attachmentIds.map((id) => attachmentPrep.get(id) ?? Promise.resolve()))
+    if (!(await page.isEditOpen())) {
+      throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+    }
+    await page.installApiHeaderHook()
+
+    let typed = false
+    for (let attempt = 0; attempt < 8 && !typed; attempt += 1) {
+      typed = await page.setEditText(payload.text)
+      if (!typed) await delay(300)
+    }
+    if (!typed) throw new Error('没找到编辑框，页面可能还没加载好')
+
+    // 等网页编辑框真正允许发送（原附件可能还在加载、新附件还在上传）
+    const deadline = Date.now() + 20_000
+    while (Date.now() < deadline) {
+      const cards = await page.readEditAttachmentStatuses()
+      if (cards.some((card) => card.status === 'error')) {
+        throw new Error('请删除或重新上传异常文件后再发送')
+      }
+      if (await page.isEditSendEnabled()) break
+      await delay(300)
+    }
+
+    await page.syncComposerSwitches({
+      deepThink: payload.deepThink,
+      smartSearch: payload.smartSearch,
+    })
+    await delay(250)
+
+    const baseline = await page.listAnswers()
+    let sent = false
+    for (let attempt = 0; attempt < 8 && !sent; attempt += 1) {
+      sent = await page.clickEditSend()
+      if (!sent) {
+        const cards = await page.readEditAttachmentStatuses()
+        if (cards.some((card) => card.status === 'error')) {
+          throw new Error('请删除或重新上传异常文件后再发送')
+        }
+        await delay(250)
+      }
+    }
+    if (!sent) throw new Error(translate(currentLanguage(), 'quick.editSendFailed'))
+
+    markAttachmentsSent(attachmentIds)
+    editAttachmentIds.clear()
+    editSessionActive = false
+    editExistingCount = 0
+
+    /*
+     * 网页可能原地替换旧回答，也可能在末尾追加新回答。
+     * 等它把新分支画出来后确定当前回答下标，搜索/思考才能读到正确的那条。
+     */
+    let answerIndex = Math.max(0, baseline.length - 1)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const count = (await page.listAnswers()).length
+      if (count > baseline.length) {
+        answerIndex = baseline.length
+        break
+      }
+      if (count < baseline.length) {
+        answerIndex = Math.max(0, count - 1)
+        break
+      }
+      await delay(150)
+    }
+
+    await streamAnswer(
+      page,
+      quick,
+      {
+        deepThink: payload.deepThink,
+        smartSearch: payload.smartSearch,
+        answerIndex,
+        currentTurn: true,
+      },
+      baseline,
+      token,
+      viewEpoch,
+    )
+  } catch (err) {
+    if (token.cancelled) return
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[快捷窗口] 修改消息失败:', message)
+    quick.sendEvent({ type: 'error', message })
+    return
+  } finally {
+    if (activeToken === token) activeToken = null
+  }
+
+  quick.sendEvent({ type: 'answer-done' })
+}
+
+/** 重新生成最新一条回答：点网页当前轮的重新生成，再按当前轮读取新回答 */
+async function handleQuickRegenerate(): Promise<void> {
+  const win = mainWindow
+  const quick = quickWindow
+  if (!win || !quick) return
+  if (activeToken) {
+    quick.sendEvent({ type: 'error', message: translate(currentLanguage(), 'quick.editWaitAnswer') })
+    return
+  }
+
+  const page = new DeepSeekPage(win.pageView)
+  const token: StreamToken = { cancelled: false }
+  activeToken = token
+  const viewEpoch = ++quickViewEpoch
+
+  try {
+    if (activeHistoryId) {
+      const target = activeHistoryId
+      activeHistoryId = null
+      const switched = await page.switchToHistory(target)
+      if (!switched) throw new Error(translate(currentLanguage(), 'quick.editOpenFailed'))
+      await delay(500)
+    }
+    await page.installApiHeaderHook()
+
+    const baseline = await page.listAnswers()
+    if (!(await page.clickRegenerateLastAnswer())) {
+      throw new Error(translate(currentLanguage(), 'quick.regenerateFailed'))
+    }
+
+    let answerIndex = Math.max(0, baseline.length - 1)
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const count = (await page.listAnswers()).length
+      if (count > baseline.length) {
+        answerIndex = baseline.length
+        break
+      }
+      if (count < baseline.length) {
+        answerIndex = Math.max(0, count - 1)
+        break
+      }
+      await delay(150)
+    }
+
+    await streamAnswer(
+      page,
+      quick,
+      {
+        deepThink: true,
+        smartSearch: true,
+        watchAll: true,
+        currentTurn: true,
+        answerIndex,
+      },
+      baseline,
+      token,
+      viewEpoch,
+    )
+  } catch (err) {
+    if (token.cancelled) return
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[快捷窗口] 重新生成失败:', message)
     quick.sendEvent({ type: 'error', message })
     return
   } finally {
@@ -1535,6 +1914,8 @@ async function handleContinueGeneration(): Promise<void> {
 
 /** 接口一次取回 100 条，快捷窗口每次先显示 30 条，滚动再追加 */
 const HISTORY_API_CHUNK = 30
+/** 历史切换最多展示最新 50 条 */
+const HISTORY_MAX_ITEMS = 50
 
 let historyPanelOpen = false
 let historyLoadingMore = false
@@ -1562,7 +1943,15 @@ let quickViewEpoch = 0
 /** 把接口列表里下一段（30 条）推给快捷窗口 */
 function sendApiHistoryChunk(quick: QuickWindow): void {
   const items = historyApiItems ?? []
-  const next = items.slice(historyApiSent, historyApiSent + HISTORY_API_CHUNK)
+  const remaining = Math.max(0, HISTORY_MAX_ITEMS - historyApiSent)
+  if (!remaining) {
+    quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+    return
+  }
+  const next = items.slice(
+    historyApiSent,
+    historyApiSent + Math.min(HISTORY_API_CHUNK, remaining),
+  )
   // 第一次发送是覆盖，后续滚动加载是追加
   const append = historyApiSent > 0
   historyApiSent += next.length
@@ -1571,7 +1960,9 @@ function sendApiHistoryChunk(quick: QuickWindow): void {
     type: 'history-list',
     items: next,
     append,
-    hasMore: historyApiSent < items.length || historyApiHasMore,
+    hasMore:
+      historyApiSent < Math.min(items.length, HISTORY_MAX_ITEMS) ||
+      (historyApiHasMore && historyApiSent < HISTORY_MAX_ITEMS),
   })
 }
 
@@ -1646,13 +2037,17 @@ async function handleHistoryToggle(open: boolean): Promise<void> {
 
   if (epoch !== historyListEpoch || !historyPanelOpen) return
   console.log(`[历史] 列表来源=dom，${result.items.length} 条`)
-  for (const item of result.items) historySentIds.add(item.id)
+  const domItems = result.items.slice(0, HISTORY_MAX_ITEMS)
+  for (const item of domItems) historySentIds.add(item.id)
   quick.sendEvent({
     type: 'history-list',
-    items: result.items,
+    items: domItems,
     append: false,
-    // 列表比视口高就说明可能还有下一页；至少让用户有机会加载一次
-    hasMore: result.scrollable && result.items.length > 0,
+    // 列表比视口高、且还没到 50 条时，才允许继续加载
+    hasMore:
+      result.scrollable &&
+      domItems.length > 0 &&
+      domItems.length < HISTORY_MAX_ITEMS,
   })
 }
 
@@ -1664,6 +2059,10 @@ async function handleHistoryMore(): Promise<void> {
   historyLoadingMore = true
   const epoch = historyListEpoch
   try {
+    if (historyApiItems && historyApiSent >= HISTORY_MAX_ITEMS) {
+      quick.sendEvent({ type: 'history-list', items: [], append: true, hasMore: false })
+      return
+    }
     // 接口路径：内存里还有就直接发；没有就带 cursor 再取一页
     if (historyApiItems) {
       if (historyApiSent < historyApiItems.length) {
@@ -1714,7 +2113,10 @@ async function handleHistoryMore(): Promise<void> {
     // 侧边栏加载下一页需要一点时间；等太短会误判成「到底了」
     await delay(1200)
     const { items } = await page.readHistory()
-    const fresh = items.filter((item) => !historySentIds.has(item.id))
+    const remaining = Math.max(0, HISTORY_MAX_ITEMS - historySentIds.size)
+    const fresh = items
+      .filter((item) => !historySentIds.has(item.id))
+      .slice(0, remaining)
     for (const item of fresh) historySentIds.add(item.id)
 
     if (epoch !== historyListEpoch || !historyPanelOpen) return
@@ -1722,8 +2124,8 @@ async function handleHistoryMore(): Promise<void> {
       type: 'history-list',
       items: fresh,
       append: true,
-      // 这一屏确实拉到了新内容，就认为后面可能还有；没有新增就到底了
-      hasMore: fresh.length > 0,
+      // 这一屏确实拉到了新内容，且还没到 50 条，就认为后面可能还有
+      hasMore: fresh.length > 0 && historySentIds.size < HISTORY_MAX_ITEMS,
     })
   } finally {
     historyLoadingMore = false
@@ -1795,6 +2197,7 @@ async function handleHistorySelect(id: string): Promise<void> {
   historyOldestKey = messages[0]?.key ?? null
   activeHistoryId = id
   preparedNewChat = false
+  resetEditSession()
   resetAttachmentPreparation()
   clearPendingAttachments()
   clearHistoryAttachments()
@@ -1855,6 +2258,7 @@ async function startNewChatOnPage(): Promise<void> {
   quickViewEpoch += 1
   activeHistoryId = null
   preparedNewChat = false
+  resetEditSession()
   resetAttachmentPreparation()
   clearPendingAttachments()
   clearHistoryAttachments()

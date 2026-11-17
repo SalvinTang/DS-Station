@@ -226,6 +226,19 @@ export interface QuickSubmitPayload {
   startNewChat: boolean
 }
 
+export interface QuickEditStartResult {
+  ok: boolean
+  error?: string
+}
+
+export interface QuickEditSubmitPayload {
+  text: string
+  /** 新加的本地附件 id；原消息附件已经在网页编辑框里 */
+  attachmentIds: string[]
+  deepThink: boolean
+  smartSearch: boolean
+}
+
 export interface HotkeyUpdateResult {
   ok: boolean
   /** 给用户看的一句话（已按当前语言翻译好） */
@@ -293,6 +306,24 @@ export interface DsApi {
 
   /** 提交一条消息，主进程会驱动主窗口里的 DeepSeek 网页完成这次对话 */
   submitQuickMessage: (payload: QuickSubmitPayload) => void
+
+  /** 重新生成最新一条回答 */
+  regenerateLatestAnswer: () => void
+
+  /** 打开网页里最后一条用户消息的编辑框 */
+  startEdit: () => Promise<QuickEditStartResult>
+
+  /** 取消编辑，恢复原消息 */
+  cancelEdit: () => Promise<void>
+
+  /** 提交修改后的消息 */
+  submitEdit: (payload: QuickEditSubmitPayload) => void
+
+  /** 编辑模式下的附件状态（顺序和快捷窗口里的附件一致） */
+  getEditAttachmentStatuses: (ids: string[]) => Promise<AttachmentStatusInfo[]>
+
+  /** 移除编辑框里的附件；同时更新本地待发送记录 */
+  removeEditAttachment: (id: string, index: number) => Promise<void>
 
   /** 停止生成：点掉 DeepSeek 页面上的停止按钮 */
   stopQuickGeneration: () => void
