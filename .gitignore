@@ -87,3 +87,5 @@ desktop.ini
 # ── 本地工具配置 ──────────────────────────────────────────────────
 # Claude Code 的个人设置（项目共享配置仍保留）
 .claude/settings.local.json
+# WorkBuddy 的本地工作文件，不入库
+.workbuddy/
